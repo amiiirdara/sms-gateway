@@ -19,6 +19,8 @@ x-go-service: &go-service
       condition: service_started
     clickhouse:
       condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
   restart: unless-stopped
 
 services:
@@ -79,11 +81,33 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse/init:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      # Prefer clickhouse-client over wget-to-localhost: alpine resolves
+      # localhost to ::1, but this image listens on IPv4 only under Docker Desktop.
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
+
+  migrate:
+    image: migrate/migrate:v4.18.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations
+    command:
+      [
+        "-path=/migrations",
+        "-database=postgres://sms:sms@postgres:5432/sms_gateway?sslmode=disable",
+        "up",
+      ]
+    restart: "no"
 
   operator-mock:
     <<: *go-service
@@ -141,6 +165,9 @@ services:
       args:
         SERVICE: dispatcher
     command: ["--mode=normal"]
+    environment:
+      <<: *go-env
+      OPERATOR_URL: http://operator-mock:8080
 
   dispatcher-express:
     <<: *go-service
@@ -150,6 +177,9 @@ services:
       args:
         SERVICE: dispatcher
     command: ["--mode=express"]
+    environment:
+      <<: *go-env
+      OPERATOR_URL: http://operator-mock:8080
 
   report-sink:
     <<: *go-service

@@ -1,22 +1,20 @@
-// Command dispatcher consumes outbound SMS topics and calls the operator mock.
+// Command dispatcher consumes outbound SMS topics and calls routed operators.
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
 	"github.com/amiri/sms-gateway/internal/db/sqlc"
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
+	"github.com/amiri/sms-gateway/internal/domain/messaging/operator"
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
@@ -55,8 +53,15 @@ func main() {
 	resultsW := platkafka.NewWriter(cfg.KafkaBrokers, platkafka.TopicDispatchResults)
 	defer resultsW.Close()
 
-	operatorURL := env("OPERATOR_URL", "http://operator-mock:8080")
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	// Local demo: all named MNOs point at the same operator-mock; swap URLs in prod.
+	mockURL := env("OPERATOR_URL", "http://operator-mock:8080")
+	fallback := operator.NewHTTPAdapter("default", mockURL)
+	router := operator.NewRouter(fallback, []operator.Adapter{
+		fallback,
+		operator.NewHTTPAdapter("mci", env("OPERATOR_URL_MCI", mockURL)),
+		operator.NewHTTPAdapter("irancell", env("OPERATOR_URL_IRANCELL", mockURL)),
+		operator.NewHTTPAdapter("rightel", env("OPERATOR_URL_RIGHTEL", mockURL)),
+	}, operator.DefaultIranRules())
 
 	log.Printf("dispatcher: started mode=%s topic=%s", *mode, topic)
 	for {
@@ -70,7 +75,7 @@ func main() {
 			time.Sleep(time.Second)
 			continue
 		}
-		if err := handle(ctx, *mode, msg, inboxStore, q, resultsW, operatorURL, httpClient); err != nil {
+		if err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router); err != nil {
 			log.Printf("dispatcher: handle: %v", err)
 			continue
 		}
@@ -87,8 +92,7 @@ func handle(
 	inboxStore *inbox.Store,
 	q *sqlc.Queries,
 	resultsW *kafkago.Writer,
-	operatorURL string,
-	httpClient *http.Client,
+	router *operator.Router,
 ) error {
 	var ev messaging.AcceptedMessage
 	if err := json.Unmarshal(msg.Value, &ev); err != nil {
@@ -107,15 +111,14 @@ func handle(
 
 	now := time.Now().UTC()
 	status := "sent"
-	operator := "mock"
+	operatorName := ""
 
 	if mode == "express" && messaging.ExpressExpired(ev.Deadline, now) {
 		status = "expired_sla_missed"
-		operator = ""
-	}
-
-	if status != "expired_sla_missed" {
-		if err := callOperator(ctx, httpClient, operatorURL, ev); err != nil {
+	} else {
+		name, sendErr := router.Send(ctx, ev.To, ev.Text, ev.Priority)
+		operatorName = name
+		if sendErr != nil {
 			status = "failed"
 		}
 	}
@@ -159,7 +162,7 @@ func handle(
 		return fmt.Errorf("create message: %w", err)
 	}
 
-	opText := pgtype.Text{String: operator, Valid: operator != ""}
+	opText := pgtype.Text{String: operatorName, Valid: operatorName != ""}
 	dispatchedAt := pgtype.Timestamptz{Time: now, Valid: true}
 	if err := qtx.UpdateMessageStatus(ctx, sqlc.UpdateMessageStatusParams{
 		ID:           messageID,
@@ -190,7 +193,7 @@ func handle(
 		Priority:     ev.Priority,
 		Cost:         ev.Cost,
 		Status:       status,
-		Operator:     operator,
+		Operator:     operatorName,
 		AcceptedAt:   ev.AcceptedAt,
 		DispatchedAt: now,
 		CreatedAt:    ev.AcceptedAt,
@@ -200,29 +203,6 @@ func handle(
 		return err
 	}
 	return platkafka.Publish(ctx, resultsW, []byte(ev.AccountID), payload)
-}
-
-func callOperator(ctx context.Context, client *http.Client, baseURL string, ev messaging.AcceptedMessage) error {
-	body, _ := json.Marshal(map[string]string{
-		"to":       ev.To,
-		"text":     ev.Text,
-		"priority": ev.Priority,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/send", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("operator status %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func env(k, def string) string {

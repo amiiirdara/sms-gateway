@@ -15,6 +15,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/httpx"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 )
@@ -42,6 +43,7 @@ func main() {
 	authMw := auth.Middleware(billingSvc.Queries())
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -112,13 +114,16 @@ func main() {
 			IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		})
 		if errors.Is(err, messaging.ErrInsufficientFunds) {
+			metrics.MessagesRejected.WithLabelValues("insufficient_funds").Inc()
 			httpx.Error(w, http.StatusPaymentRequired, "insufficient funds")
 			return
 		}
 		if err != nil {
+			metrics.MessagesRejected.WithLabelValues("validation").Inc()
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		metrics.MessagesAccepted.WithLabelValues(body.Priority).Inc()
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
 	})))
 
@@ -140,6 +145,7 @@ func main() {
 		})
 		var insuf *campaigns.InsufficientFundsError
 		if errors.As(err, &insuf) {
+			metrics.MessagesRejected.WithLabelValues("campaign_insufficient_funds").Inc()
 			httpx.WriteJSON(w, http.StatusPaymentRequired, map[string]any{
 				"error":     "insufficient funds",
 				"required":  insuf.Required,
@@ -148,9 +154,11 @@ func main() {
 			return
 		}
 		if err != nil {
+			metrics.MessagesRejected.WithLabelValues("campaign_validation").Inc()
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		metrics.CampaignsAccepted.Inc()
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
 	})))
 

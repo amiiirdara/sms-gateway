@@ -18,6 +18,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -182,6 +183,11 @@ func handle(
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
+	}
+
+	metrics.DispatchTotal.WithLabelValues(mode, status, operatorName).Inc()
+	if !ev.AcceptedAt.IsZero() {
+		metrics.DispatchLatency.WithLabelValues(mode, ev.Priority).Observe(now.Sub(ev.AcceptedAt).Seconds())
 	}
 
 	result := messaging.DispatchResult{

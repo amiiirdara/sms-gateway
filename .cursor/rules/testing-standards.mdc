@@ -1,0 +1,17 @@
+---
+description: Testing conventions for this repo
+globs: **/*_test.go
+alwaysApply: false
+---
+
+# Testing Standards
+
+- Table-driven tests for anything with more than one meaningful case; name the test cases descriptively (`"exact zero balance succeeds"`, not `"case 3"`).
+- Use `testcontainers-go` for integration tests that need real Postgres/Redis/Kafka - do not mock these out for logic that depends on their actual semantics (transactions, Lua atomicity, consumer groups).
+- Mandatory edge-case coverage before merging balance/billing changes:
+  - Sending when balance exactly equals cost succeeds and leaves balance at exactly 0.
+  - Concurrent requests racing against a balance that can only cover one of them - exactly one succeeds.
+  - A campaign whose total cost exceeds balance is rejected in full (no partial deduction).
+  - An Express message past its deadline is dropped and refunded, never dispatched.
+- Kafka consumers: test that reprocessing the same message twice (simulating at-least-once redelivery) has no double side effect (no double charge, no double send).
+- Unit-test business logic (`internal/domain/*`) against interfaces/fakes; reserve `testcontainers-go` for the platform/integration layer.

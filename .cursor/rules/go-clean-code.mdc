@@ -1,0 +1,40 @@
+---
+description: Clean code, SOLID, and design pattern conventions for Go code in this repo
+globs: **/*.go
+alwaysApply: false
+---
+
+# Go Clean Code
+
+- Keep interfaces small (1-3 methods) and defined at the consumer, not the implementer (e.g. `messaging` defines the `OperatorAdapter` interface it needs; `operator-mock` implements it).
+- One reason to change per package/type (SRP). Split a file/type the moment it serves two unrelated concerns (e.g. HTTP handling vs. balance logic).
+- Prefer composition over embedding-as-inheritance. Avoid deep embedding chains.
+- Avoid these smells: god structs/packages that do everything, functions over ~40 lines, more than ~4 parameters (use a struct), primitive obsession (e.g. passing raw `string` phone numbers everywhere instead of a `PhoneNumber` type), shotgun surgery (one logical change requiring edits across many unrelated files - usually means a missing abstraction).
+- Use design patterns only where they remove real duplication/complexity, not by default:
+  - **Strategy** for `OperatorAdapter` and operator routing.
+  - **Repository** for all DB access (never call `sqlc`-generated queries directly from HTTP handlers or Kafka consumers - go through a repository type in `domain/*`).
+  - **Adapter** for wrapping external integrations (operator APIs, etc.).
+  - **Decorator** for HTTP middleware (auth resolution, rate limiting, logging).
+- Errors: wrap with context (`fmt.Errorf("...: %w", err)`), never swallow (`if err != nil {}`), never `panic` outside `main()`/startup.
+- Concurrency: every goroutine must have a clear owner and shutdown path; always pass `context.Context` and respect cancellation; avoid unbounded goroutine-per-request patterns for background work - use worker pools.
+
+```go
+// BAD - swallowed error, primitive obsession, no context
+func Send(to string, text string) error {
+    balance, _ := redis.Get(to)
+    if balance < 1 { return errors.New("no") }
+    return nil
+}
+
+// GOOD
+func (s *MessageService) Send(ctx context.Context, req SendRequest) (*Message, error) {
+    ok, err := s.wallet.CheckAndDebit(ctx, req.AccountID, req.Cost)
+    if err != nil {
+        return nil, fmt.Errorf("debit balance for account %s: %w", req.AccountID, err)
+    }
+    if !ok {
+        return nil, ErrInsufficientFunds
+    }
+    ...
+}
+```

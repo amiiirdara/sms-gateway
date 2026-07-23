@@ -1,0 +1,13 @@
+---
+description: Tenant/account identity and cross-tenant data isolation rules
+alwaysApply: true
+---
+
+# Tenant Isolation
+
+- There is no login/session system in this product, but there **is** tenant isolation: every account has an API key, and every authenticated request resolves `account_id` from that key server-side (middleware), never from a client-supplied path/query/body parameter.
+- Any handler that receives an `accountId`/`account_id` from the request itself (path, query string, or JSON body) instead of from the authenticated context is a bug - reject it in review.
+- Ownership checks are mandatory on every by-ID lookup (`GET /v1/messages/{id}`, `GET /v1/campaigns/{id}`, etc.): the query must filter by both the resource ID and the authenticated `account_id`.
+- Cross-tenant lookups (resource exists but belongs to another account) return `404`, never `403` - don't confirm the existence of another tenant's resource.
+- `POST /v1/accounts` is the one intentionally open, unauthenticated endpoint - it must stay rate-limited to prevent abuse; do not relax that.
+- API keys are stored hashed (`accounts.api_key_hash`) - never log a raw API key, never store it in plaintext.

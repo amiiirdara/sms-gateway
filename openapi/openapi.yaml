@@ -1,0 +1,294 @@
+openapi: 3.0.3
+info:
+  title: SMS Gateway API
+  version: "1.0.0"
+  description: |
+    REST API for the SMS Gateway. See ARCHITECTURE.md for full design rationale.
+    Tenant identity is always resolved from the `Authorization` API key header,
+    never from a path/query/body parameter.
+servers:
+  - url: /v1
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /accounts:
+    post:
+      summary: Create a tenant account (open, unauthenticated, rate-limited)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId: { type: string, format: uuid }
+                  apiKey: { type: string }
+
+  /topups:
+    post:
+      summary: Add credit to the authenticated account's balance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: New balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceResponse"
+
+  /balance:
+    get:
+      summary: Get the authenticated account's current balance
+      responses:
+        "200":
+          description: Current balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceResponse"
+
+  /messages:
+    post:
+      summary: Send a single SMS
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, text, priority]
+              properties:
+                to:
+                  type: string
+                  description: E.164 (+989121234567) or local Iranian mobile format (09121234567)
+                text: { type: string }
+                priority: { $ref: "#/components/schemas/Priority" }
+      responses:
+        "202":
+          description: Message accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageAcceptedResponse"
+        "402":
+          description: Insufficient balance
+        "400":
+          description: Invalid request (e.g. malformed phone number)
+
+  /messages/{id}:
+    get:
+      summary: Get a single message's status/detail
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+      responses:
+        "200":
+          description: Message detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "404":
+          description: Not found or not owned by the caller
+
+  /campaigns:
+    post:
+      summary: Send a batch SMS campaign (always normal priority - see ARCHITECTURE.md section 9)
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, recipients]
+              properties:
+                text: { type: string }
+                recipients:
+                  type: array
+                  maxItems: 10000
+                  items: { type: string }
+      responses:
+        "202":
+          description: Campaign accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignAcceptedResponse"
+        "402":
+          description: Insufficient balance for the full campaign (all-or-nothing, no partial sends)
+    get:
+      summary: List the authenticated account's campaigns
+      parameters:
+        - $ref: "#/components/parameters/Page"
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Campaign" }
+
+  /campaigns/{id}:
+    get:
+      summary: Get a campaign's summary/status
+      parameters:
+        - $ref: "#/components/parameters/CampaignId"
+      responses:
+        "200":
+          description: Campaign summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+        "404":
+          description: Not found or not owned by the caller
+
+  /campaigns/{id}/report:
+    get:
+      summary: Aggregate delivery report for a campaign
+      parameters:
+        - $ref: "#/components/parameters/CampaignId"
+      responses:
+        "200":
+          description: Aggregate report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignReport"
+        "404":
+          description: Not found or not owned by the caller
+
+  /reports:
+    get:
+      summary: Paginated message report, implicitly scoped to the authenticated account
+      parameters:
+        - name: campaignId
+          in: query
+          schema: { type: string, format: uuid }
+          description: Optional - filter to a single campaign's messages
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/MessageStatus" }
+        - $ref: "#/components/parameters/Page"
+      responses:
+        "200":
+          description: Paginated report
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Message" }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      description: Tenant API key issued by POST /accounts
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string }
+    MessageId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CampaignId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+
+  schemas:
+    Priority:
+      type: string
+      enum: [normal, express]
+    MessageStatus:
+      type: string
+      enum: [accepted, queued, dispatched, sent, failed, expired_sla_missed]
+    BalanceResponse:
+      type: object
+      properties:
+        balance: { type: integer }
+    MessageAcceptedResponse:
+      type: object
+      properties:
+        messageId: { type: string, format: uuid }
+        status: { type: string }
+        cost: { type: integer }
+    CampaignAcceptedResponse:
+      type: object
+      properties:
+        campaignId: { type: string, format: uuid }
+        totalRecipients: { type: integer }
+        cost: { type: integer }
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid, nullable: true }
+        recipient: { type: string }
+        priority: { $ref: "#/components/schemas/Priority" }
+        cost: { type: integer }
+        status: { $ref: "#/components/schemas/MessageStatus" }
+        createdAt: { type: string, format: date-time }
+        dispatchedAt: { type: string, format: date-time, nullable: true }
+    Campaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string }
+        totalRecipients: { type: integer }
+        costPerMessage: { type: integer }
+        totalCost: { type: integer }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+    CampaignReport:
+      type: object
+      properties:
+        totalRecipients: { type: integer }
+        sent: { type: integer }
+        failed: { type: integer }
+        expiredSlaMissed: { type: integer }
+        pending: { type: integer }
+        totalCost: { type: integer }
+        refundedAmount: { type: integer }

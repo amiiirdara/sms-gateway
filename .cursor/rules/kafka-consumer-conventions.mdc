@@ -1,0 +1,15 @@
+---
+description: Conventions for every Kafka consumer service in this repo
+globs: cmd/dispatcher/**,cmd/report-sink/**,cmd/billing-consumer/**,cmd/campaign-expander/**,cmd/outbox-relay/**,internal/platform/kafka/**,internal/platform/inbox/**
+alwaysApply: false
+---
+
+# Kafka Consumer Conventions
+
+- Every consumer checks the Inbox table (`processed_events`, keyed by `(consumer_name, event_id)`) **before** any side effect, and inserts into it in the same transaction as the business write. See `internal/platform/inbox`.
+- Commit Kafka offsets manually, only after the message is fully processed (side effect + Inbox insert committed). Never auto-commit.
+- On exhausted retries, publish to `sms.dlq` with the original payload + failure reason - never drop silently.
+- Never block the consume loop on a slow downstream call without a timeout; use `context.WithTimeout` on every external call (Postgres, operator adapter, etc.) so one slow dependency can't stall an entire partition indefinitely.
+- Assume at-least-once delivery everywhere: duplicate messages are a normal, expected input, not an edge case - if a handler isn't provably idempotent via the Inbox check, it's a bug.
+- The Express dispatcher must check its deadline (`deadline_at`) immediately before calling the operator, not only at enqueue time - consumer lag can push real time past the deadline even if the message looked fine when produced.
+- New consumer services should be scaffolded with `.cursor/skills/add-kafka-consumer` to keep graceful shutdown, metrics, and Inbox wiring consistent.

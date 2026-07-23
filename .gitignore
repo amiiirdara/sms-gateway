@@ -1,0 +1,9 @@
+/bin/
+*.exe
+*.test
+*.out
+.env
+.DS_Store
+
+# Go build/test cache artifacts if ever created inside the repo
+/dist/

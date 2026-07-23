@@ -1,7 +1,4 @@
-// Command reconciler is the safety-net drift detector between Redis balances
-// and the Postgres ledger. See ARCHITECTURE.md section 5.3. Scaffold stub -
-// real comparison/alerting/safe-direction-heal logic lands in
-// internal/domain/billing during the implementation phase.
+// Command reconciler is a safety-net job that compares Redis balances to ledger sums.
 package main
 
 import (
@@ -10,30 +7,74 @@ import (
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
+	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/postgres"
+	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 )
 
 func main() {
 	cfg := config.Load("reconciler")
-	log.Printf("reconciler starting (redis=%s db=%s)", cfg.RedisAddr, cfg.DatabaseURL)
-
 	ctx, stop := lifecycle.WithShutdownSignal(context.Background())
 	defer stop()
 
-	ticker := time.NewTicker(time.Minute)
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("reconciler: postgres: %v", err)
+	}
+	defer pool.Close()
+	rdb, err := platredis.NewClient(ctx, cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("reconciler: redis: %v", err)
+	}
+	defer rdb.Close()
+
+	billingSvc := billing.New(pool, rdb)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	log.Println("reconciler: started")
+	runOnce(ctx, billingSvc, rdb)
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("reconciler: shutting down")
 			return
 		case <-ticker.C:
-			// TODO(implementation phase): for each account, compare
-			// SUM(ledger_entries) to balance:{account_id} in Redis.
-			// Redis higher -> auto-correct down + alert (dangerous direction).
-			// Redis lower -> alert only, do not auto-heal (safe/expected-lag direction).
-			log.Println("reconciler: tick (not yet implemented)")
+			runOnce(ctx, billingSvc, rdb)
+		}
+	}
+}
+
+func runOnce(ctx context.Context, billingSvc *billing.Service, rdb *platredis.Client) {
+	ids, err := billingSvc.ListAccountIDs(ctx)
+	if err != nil {
+		log.Printf("reconciler: list accounts: %v", err)
+		return
+	}
+	for _, id := range ids {
+		ledger, err := billingSvc.LedgerSum(ctx, id)
+		if err != nil {
+			log.Printf("reconciler: ledger sum %s: %v", id, err)
+			continue
+		}
+		redisBal, err := rdb.GetBalance(ctx, id.String())
+		if err != nil {
+			log.Printf("reconciler: redis balance %s: %v", id, err)
+			continue
+		}
+		switch {
+		case redisBal > ledger:
+			// Dangerous free-credit direction: auto-heal Redis down.
+			log.Printf("reconciler: ALERT redis>%s ledger for %s (redis=%d ledger=%d); healing redis down",
+				"ledger", id, redisBal, ledger)
+			if err := rdb.SetBalance(ctx, id.String(), ledger); err != nil {
+				log.Printf("reconciler: heal failed: %v", err)
+			}
+		case redisBal < ledger:
+			// Safe/expected lag direction: alert only.
+			log.Printf("reconciler: WARN redis<ledger for %s (redis=%d ledger=%d); not auto-healing",
+				id, redisBal, ledger)
 		}
 	}
 }

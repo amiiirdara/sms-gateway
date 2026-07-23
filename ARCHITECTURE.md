@@ -1,6 +1,6 @@
 # SMS Gateway - Architecture
 
-Status: **v1 - approved design, pre-implementation.**
+Status: **v1 - implementation in progress (vertical slices 0–5 wired; tests ongoing).**
 
 ## 1. Overview
 

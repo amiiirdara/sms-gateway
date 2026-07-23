@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 620" role="img" aria-label="SMS Gateway architecture diagram">
+  <title>SMS Gateway Architecture</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1e293b"/>
+    </marker>
+    <style>
+      .box { fill:#f8fafc; stroke:#1e293b; stroke-width:1.5; }
+      .store { fill:#e2e8f0; stroke:#1e293b; stroke-width:1.5; }
+      .bus { fill:#fff7ed; stroke:#9a3412; stroke-width:1.5; }
+      .lbl { font-family:Segoe UI,Helvetica,Arial,sans-serif; font-size:13px; fill:#0f172a; text-anchor:middle; }
+      .sub { font-family:Segoe UI,Helvetica,Arial,sans-serif; font-size:11px; fill:#475569; text-anchor:middle; }
+      .title { font-family:Segoe UI,Helvetica,Arial,sans-serif; font-size:20px; font-weight:600; fill:#0f172a; text-anchor:start; }
+      .edge { stroke:#1e293b; stroke-width:1.5; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1120" height="620" fill="#ffffff"/>
+  <text x="32" y="36" class="title">SMS Gateway Architecture</text>
+  <text x="32" y="56" class="sub" text-anchor="start">Accept ’ Outbox ’ Kafka ’ Dispatch / Billing / Reports</text>
+
+  <!-- Client -->
+  <rect class="box" x="40" y="120" width="110" height="56" rx="8"/>
+  <text class="lbl" x="95" y="145">Client</text>
+  <text class="sub" x="95" y="162">API key</text>
+
+  <!-- API Gateway -->
+  <rect class="box" x="200" y="120" width="130" height="56" rx="8"/>
+  <text class="lbl" x="265" y="145">API Gateway</text>
+  <text class="sub" x="265" y="162">ingest + debit</text>
+
+  <!-- Redis -->
+  <ellipse class="store" cx="420" cy="148" rx="70" ry="40"/>
+  <text class="lbl" x="420" y="145">Redis</text>
+  <text class="sub" x="420" y="162">balance + outbox</text>
+
+  <!-- Outbox Relay -->
+  <rect class="box" x="530" y="120" width="120" height="56" rx="8"/>
+  <text class="lbl" x="590" y="145">Outbox Relay</text>
+  <text class="sub" x="590" y="162">XREAD ’ Kafka</text>
+
+  <!-- Kafka -->
+  <rect class="bus" x="700" y="110" width="100" height="76" rx="10"/>
+  <text class="lbl" x="750" y="145">Kafka</text>
+  <text class="sub" x="750" y="162">topics</text>
+
+  <!-- Dispatchers -->
+  <rect class="box" x="860" y="70" width="140" height="50" rx="8"/>
+  <text class="lbl" x="930" y="92">Dispatcher</text>
+  <text class="sub" x="930" y="108">normal</text>
+
+  <rect class="box" x="860" y="140" width="140" height="50" rx="8"/>
+  <text class="lbl" x="930" y="162">Dispatcher</text>
+  <text class="sub" x="930" y="178">express + SLA</text>
+
+  <!-- Operator -->
+  <rect class="box" x="860" y="230" width="140" height="50" rx="8"/>
+  <text class="lbl" x="930" y="252">Operator</text>
+  <text class="sub" x="930" y="268">mock / adapters</text>
+
+  <!-- Results bus -->
+  <rect class="bus" x="700" y="320" width="100" height="56" rx="10"/>
+  <text class="lbl" x="750" y="345">Results</text>
+  <text class="sub" x="750" y="362">topic</text>
+
+  <!-- Billing / Report -->
+  <rect class="box" x="500" y="320" width="130" height="56" rx="8"/>
+  <text class="lbl" x="565" y="345">Billing</text>
+  <text class="sub" x="565" y="362">ledger + refund</text>
+
+  <rect class="box" x="500" y="410" width="130" height="56" rx="8"/>
+  <text class="lbl" x="565" y="435">Report Sink</text>
+  <text class="sub" x="565" y="452">Inbox dedup</text>
+
+  <!-- Stores -->
+  <ellipse class="store" cx="320" cy="348" rx="70" ry="40"/>
+  <text class="lbl" x="320" y="345">Postgres</text>
+  <text class="sub" x="320" y="362">SoR + Inbox</text>
+
+  <ellipse class="store" cx="320" cy="438" rx="70" ry="40"/>
+  <text class="lbl" x="320" y="435">ClickHouse</text>
+  <text class="sub" x="320" y="452">reports</text>
+
+  <!-- Reporting API -->
+  <rect class="box" x="40" y="400" width="130" height="56" rx="8"/>
+  <text class="lbl" x="105" y="425">Reporting API</text>
+  <text class="sub" x="105" y="442">status / reports</text>
+
+  <!-- Reconciler -->
+  <rect class="box" x="200" y="250" width="120" height="50" rx="8"/>
+  <text class="lbl" x="260" y="272">Reconciler</text>
+  <text class="sub" x="260" y="288">safety net</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M150 148 H200"/>
+  <path class="edge" d="M330 148 H350"/>
+  <path class="edge" d="M490 148 H530"/>
+  <path class="edge" d="M650 148 H700"/>
+  <path class="edge" d="M800 140 H860"/>
+  <path class="edge" d="M800 155 H860"/>
+  <path class="edge" d="M930 120 V230"/>
+  <path class="edge" d="M930 190 V230"/>
+  <path class="edge" d="M860 255 H820 V348 H800"/>
+  <path class="edge" d="M700 348 H630"/>
+  <path class="edge" d="M650 348 V438 H630"/>
+  <path class="edge" d="M500 348 H390"/>
+  <path class="edge" d="M500 438 H390"/>
+  <path class="edge" d="M105 400 V204 H200"/>
+  <path class="edge" d="M170 428 H250"/>
+  <path class="edge" d="M250 250 V188"/>
+  <path class="edge" d="M260 300 V308 H320"/>
+</svg>

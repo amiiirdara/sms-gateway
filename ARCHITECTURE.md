@@ -33,6 +33,8 @@ This document is the source of truth for the system design. It intentionally fav
 
 ## 4. High-level architecture (single-message flow)
 
+Static diagram: [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png)
+
 ```mermaid
 flowchart LR
     Client["API Client"] -->|"REST (API key)"| Gateway["API Gateway (ingestion)"]

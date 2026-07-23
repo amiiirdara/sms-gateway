@@ -6,19 +6,21 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 
 **Repo:** https://github.com/amiiirdara/sms-gateway
 
-## Design docs
+## Documentation
 
-| Doc | Purpose |
+| Doc | Brief |
 |---|---|
-| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here** — first 5 minutes for reviewers |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Full design: Outbox/Inbox, Express SLA, campaigns, data model, API |
-| [docs/architecture.svg](docs/architecture.svg) / [docs/architecture.png](docs/architecture.png) | One-page system diagram |
-| [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract |
-| [docs/metrics.md](docs/metrics.md) | Prometheus business + technical metrics catalog |
-| [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, keys, Inbox, billing controls |
-| [docs/trade-offs.md](docs/trade-offs.md) | Deliberate non-goals / out of scope |
-| [docs/load-test-report.md](docs/load-test-report.md) | k6 accept-path scenario + recorded results |
-| [AGENTS.md](AGENTS.md) | Orientation for AI agents / contributors |
+| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here** — Compose up, smoke, edge script, k6, and what was verified (~5 min) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Full system design: Outbox/Inbox, Express SLA, campaigns, data model, API surface |
+| [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png) | One-page visual of the accept → Kafka → dispatch / billing / reports flow |
+| [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract (paths, auth, request/response schemas) |
+| [docs/metrics.md](docs/metrics.md) | Prometheus catalog — business metrics (credits, accept, SLA) and technical metrics (HTTP, outbox, Inbox) |
+| [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, API-key hashing, Inbox idempotency, billing/reconciler controls |
+| [docs/trade-offs.md](docs/trade-offs.md) | Deliberate non-goals; why 100M/day isn’t proven on Compose and what a real proof needs |
+| [docs/load-test-report.md](docs/load-test-report.md) | k6 accept-path scenario, thresholds, execution notes, and recorded run results |
+| [AGENTS.md](AGENTS.md) | Repo orientation for contributors / AI agents (layout, non-negotiables) |
+| [LICENSE](LICENSE) | MIT |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: `go vet` + `go test -short` on push/PR |
 
 ## What is implemented
 

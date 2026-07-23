@@ -10,7 +10,7 @@ alwaysApply: false
 - Never `SELECT *` - list columns explicitly so `sqlc`'s generated structs stay stable and queries only fetch what's used.
 - No N+1: if you find yourself looping and issuing one query per iteration, rewrite as a single query with `= ANY($1)` / `JOIN` / `IN`, or a bulk `INSERT ... ON CONFLICT` (see the Campaign Expander for the reference pattern).
 - Every new hot-path `WHERE`/`ORDER BY`/`JOIN ON` column needs a matching index in the same migration that introduces the query. Check with `EXPLAIN ANALYZE` for anything touching `messages` or `ledger_entries`.
-- Every table has `created_at` and `updated_at` (set `updated_at` via trigger or explicit `SET updated_at = now()` on every update - be consistent, pick the trigger approach repo-wide).
+- Every mutable business table has `created_at` and `updated_at` (set `updated_at` via trigger or explicit `SET updated_at = now()` on every update - be consistent, pick the trigger approach repo-wide). Exception: append-only Inbox table `processed_events` uses `created_at` + `processed_at` only (no `updated_at`).
 - Wrap multi-statement writes in an explicit transaction with a clear boundary (e.g. the Campaign Expander's bulk insert). Keep transactions short - never hold one open across a network call to Kafka/Redis/an external API.
 - `messages` is partitioned by day/month - always include a date-range predicate on `created_at` in queries against it so partition pruning applies; avoid unbounded scans.
 - The Inbox dedup check (`processed_events`) must happen in the **same transaction** as the business write it's guarding.

@@ -33,7 +33,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	ch, err := platch.New(ctx, cfg.ClickHouseAddr)
+	ch, err := platch.NewWithPassword(ctx, cfg.ClickHouseAddr, cfg.ClickHousePassword)
 	if err != nil {
 		log.Fatalf("report-sink: clickhouse: %v", err)
 	}

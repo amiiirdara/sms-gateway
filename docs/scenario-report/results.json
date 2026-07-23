@@ -1,0 +1,317 @@
+﻿{
+    "generated_at":  "2026-07-24T02:01:29.9329223+03:30",
+    "base_url":  "http://[::1]:8080",
+    "report_url":  "http://[::1]:8081",
+    "duration_ms":  14370,
+    "scenarios":  [
+                      {
+                          "id":  "S1",
+                          "name":  "Normal single-message happy path",
+                          "description":  "Create account --- topup 10 --- send normal SMS --- wait for terminal status --- check balance",
+                          "elapsed_ms":  718,
+                          "http":  {
+                                       "accountId":  "af63c1d3-1dc8-49c7-8e03-090319c4303e",
+                                       "acceptStatus":  "accepted",
+                                       "finalStatus":  "sent",
+                                       "topupBalance":  10,
+                                       "operator":  "mci",
+                                       "balanceAfter":  9,
+                                       "messageId":  "843608ef-e8a4-49b5-86b6-e20a55798915"
+                                   },
+                          "metrics_delta":  {
+                                                "accounts_created":  1,
+                                                "topups":  1,
+                                                "accept_duration_count":  1,
+                                                "messages_accepted_normal":  1,
+                                                "credits_spent_single":  1,
+                                                "topup_credits":  10,
+                                                "accept_duration_sum":  0.000398
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S2",
+                          "name":  "Express single-message happy path",
+                          "description":  "Create account --- topup --- send express SMS --- wait for sent",
+                          "elapsed_ms":  571,
+                          "http":  {
+                                       "acceptStatus":  "accepted",
+                                       "operator":  "mci",
+                                       "balanceAfter":  4,
+                                       "messageId":  "6d0f375f-8255-47d4-9f7d-eb007a02ad7e",
+                                       "finalStatus":  "sent"
+                                   },
+                          "metrics_delta":  {
+                                                "messages_accepted_express":  1,
+                                                "accept_duration_sum":  0.000825,
+                                                "credits_spent":  1
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S3",
+                          "name":  "Campaign all-or-nothing happy path (3 recipients)",
+                          "description":  "Topup 10 --- campaign 3 recipients --- balance 7 --- campaign report",
+                          "elapsed_ms":  8051,
+                          "http":  {
+                                       "cost":  3,
+                                       "totalRecipients":  3,
+                                       "campaignId":  "333b18b4-37ad-4c9c-b2dc-e3ce75b92345",
+                                       "campaignReport":  {
+                                                              "expiredSlaMissed":  0,
+                                                              "failed":  0,
+                                                              "pending":  0,
+                                                              "refundedAmount":  0,
+                                                              "sent":  3,
+                                                              "totalCost":  3,
+                                                              "totalRecipients":  3
+                                                          },
+                                       "balanceAfter":  7
+                                   },
+                          "metrics_delta":  {
+                                                "credits_spent_campaign":  3,
+                                                "campaigns_accepted":  1,
+                                                "recipients_accepted":  3
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S4",
+                          "name":  "Insufficient funds --- single message",
+                          "description":  "New account with 0 balance attempts send --- expect 402",
+                          "elapsed_ms":  69,
+                          "http":  {
+                                       "body":  "{\"error\":\"insufficient funds\"}\n",
+                                       "statusCode":  402,
+                                       "balanceAfter":  0
+                                   },
+                          "metrics_delta":  {
+                                                "rejected_insufficient":  1,
+                                                "messages_accepted":  0
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S5",
+                          "name":  "Campaign all-or-nothing reject",
+                          "description":  "Balance 1, campaign needs 2 --- 402, balance unchanged",
+                          "elapsed_ms":  105,
+                          "http":  {
+                                       "body":  "{\"available\":1,\"error\":\"insufficient funds\",\"required\":2}\n",
+                                       "statusCode":  402,
+                                       "balanceAfter":  1
+                                   },
+                          "metrics_delta":  {
+                                                "campaigns_rejected":  1,
+                                                "campaigns_accepted":  0
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S6",
+                          "name":  "Validation reject --- bad phone",
+                          "description":  "Malformed recipient --- 400, balance unchanged",
+                          "elapsed_ms":  102,
+                          "http":  {
+                                       "body":  "{\"error\":\"invalid phone number: expected +989xxxxxxxxx or 09xxxxxxxxx\"}\n",
+                                       "statusCode":  400,
+                                       "balanceAfter":  5
+                                   },
+                          "metrics_delta":  {
+                                                "rejected_validation":  1
+                                            },
+                          "passed":  true
+                      },
+                      {
+                          "id":  "S7",
+                          "name":  "Burst accept --- 20 sequential normal messages",
+                          "description":  "Topup 50 --- 20 accepts --- measure client-side latency distribution",
+                          "elapsed_ms":  406,
+                          "http":  {
+                                       "latency_ms":  {
+                                                          "samples":  [
+                                                                          5,
+                                                                          2.73,
+                                                                          3.25,
+                                                                          45.78,
+                                                                          2.04,
+                                                                          2,
+                                                                          3.01,
+                                                                          44.19,
+                                                                          3,
+                                                                          4.52,
+                                                                          4.17,
+                                                                          3.31,
+                                                                          46.13,
+                                                                          2.99,
+                                                                          49.51,
+                                                                          1,
+                                                                          2.02,
+                                                                          51.74,
+                                                                          47.87,
+                                                                          2.81
+                                                                      ],
+                                                          "min":  1,
+                                                          "max":  51.74,
+                                                          "p95":  49.51,
+                                                          "avg":  16.35
+                                                      },
+                                       "accepted":  20,
+                                       "balanceAfter":  30
+                                   },
+                          "metrics_delta":  {
+                                                "messages_accepted":  20,
+                                                "credits_spent":  20
+                                            },
+                          "passed":  true
+                      }
+                  ],
+    "suite_metrics_delta":  {
+                                "topup_credits":  81,
+                                "credits_spent_campaign":  3,
+                                "messages_rejected_validation":  1,
+                                "credits_spent_single_normal":  21,
+                                "campaigns_rejected_insufficient":  1,
+                                "accounts_created":  7,
+                                "messages_accepted_express":  1,
+                                "campaigns_accepted":  1,
+                                "messages_rejected_insufficient":  1,
+                                "messages_accepted_normal":  21
+                            },
+    "workers":  {
+                    "dispatcher-normal":  {
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"60\"}":  12,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"15\"}":  12,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"+Inf\"}":  12,
+                                              "sms_dispatch_latency_seconds_sum{mode=\"normal\",priority=\"normal\"}":  2.235665095,
+                                              "sms_dispatch_latency_seconds_count{mode=\"normal\",priority=\"normal\"}":  12,
+                                              "sms_campaigns_expanded_total":  0,
+                                              "sms_campaign_recipients_accepted_total":  0,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.5\"}":  12,
+                                              "sms_campaigns_accepted_total":  0,
+                                              "sms_inbox_processed_total{consumer=\"dispatcher-normal\"}":  12,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"0.25\"}":  9,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"30\"}":  12,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"5\"}":  12,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.01\"}":  0,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"0.05\"}":  3,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"2\"}":  12,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.025\"}":  0,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"0.1\"}":  4,
+                                              "sms_express_sla_missed_total":  0,
+                                              "sms_reconciler_heals_total":  0,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"5\"}":  12,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"120\"}":  12,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"1\"}":  12,
+                                              "sms_dispatch_total{mode=\"normal\",operator=\"mci\",status=\"sent\"}":  12,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.005\"}":  0,
+                                              "sms_campaign_messages_expanded_total":  0,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"0.5\"}":  11,
+                                              "sms_topup_credits_total":  0,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.05\"}":  0,
+                                              "sms_accounts_created_total":  0,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"2\"}":  12,
+                                              "sms_operator_send_duration_seconds_count{operator=\"mci\",result=\"ok\"}":  12,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"1\"}":  12,
+                                              "sms_operator_send_duration_seconds_sum{operator=\"mci\",result=\"ok\"}":  2.232797824,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.1\"}":  1,
+                                              "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.25\"}":  9,
+                                              "sms_dispatch_latency_seconds_bucket{mode=\"normal\",priority=\"normal\",le=\"+Inf\"}":  12,
+                                              "sms_topups_total":  0
+                                          },
+                    "dispatcher-express":  {
+                                               "sms_dispatch_total{mode=\"express\",operator=\"mci\",status=\"sent\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"+Inf\"}":  2,
+                                               "sms_campaigns_expanded_total":  0,
+                                               "sms_campaign_recipients_accepted_total":  0,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.5\"}":  2,
+                                               "sms_campaigns_accepted_total":  0,
+                                               "sms_dispatch_latency_seconds_count{mode=\"express\",priority=\"express\"}":  2,
+                                               "sms_campaign_messages_expanded_total":  0,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"60\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.01\"}":  0,
+                                               "sms_inbox_processed_total{consumer=\"dispatcher-express\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"2\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.025\"}":  0,
+                                               "sms_express_sla_missed_total":  0,
+                                               "sms_reconciler_heals_total":  0,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"1\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"30\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"2\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"5\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"0.5\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"15\"}":  2,
+                                               "sms_topup_credits_total":  0,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.005\"}":  0,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"0.25\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.05\"}":  0,
+                                               "sms_accounts_created_total":  0,
+                                               "sms_operator_send_duration_seconds_count{operator=\"mci\",result=\"ok\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"0.05\"}":  2,
+                                               "sms_operator_send_duration_seconds_sum{operator=\"mci\",result=\"ok\"}":  0.56472884500000009,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"120\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.1\"}":  0,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"1\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"0.1\"}":  2,
+                                               "sms_operator_send_duration_seconds_bucket{operator=\"mci\",result=\"ok\",le=\"0.25\"}":  0,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"5\"}":  2,
+                                               "sms_dispatch_latency_seconds_bucket{mode=\"express\",priority=\"express\",le=\"+Inf\"}":  2,
+                                               "sms_dispatch_latency_seconds_sum{mode=\"express\",priority=\"express\"}":  0.050995547,
+                                               "sms_topups_total":  0
+                                           },
+                    "report-sink":  {
+                                        "sms_campaigns_accepted_total":  0,
+                                        "sms_report_events_total{status=\"sent\"}":  20,
+                                        "sms_express_sla_missed_total":  0,
+                                        "sms_campaigns_expanded_total":  0,
+                                        "sms_reconciler_heals_total":  0,
+                                        "sms_accounts_created_total":  0,
+                                        "sms_campaign_recipients_accepted_total":  0,
+                                        "sms_topup_credits_total":  0,
+                                        "sms_inbox_processed_total{consumer=\"report-sink\"}":  20,
+                                        "sms_topups_total":  0,
+                                        "sms_campaign_messages_expanded_total":  0
+                                    },
+                    "billing-consumer":  {
+                                             "sms_topups_total":  0,
+                                             "sms_campaigns_expanded_total":  0,
+                                             "sms_ledger_debits_total{priority=\"express\"}":  2,
+                                             "sms_topup_credits_total":  0,
+                                             "sms_inbox_processed_total{consumer=\"billing-debit-express\"}":  2,
+                                             "sms_reconciler_heals_total":  0,
+                                             "sms_campaign_messages_expanded_total":  0,
+                                             "sms_campaigns_accepted_total":  0,
+                                             "sms_express_sla_missed_total":  0,
+                                             "sms_inbox_processed_total{consumer=\"billing-debit-normal\"}":  29,
+                                             "sms_ledger_debits_total{priority=\"normal\"}":  29,
+                                             "sms_campaign_recipients_accepted_total":  0,
+                                             "sms_accounts_created_total":  0
+                                         },
+                    "campaign-expander":  {
+                                              "sms_campaigns_accepted_total":  0,
+                                              "sms_express_sla_missed_total":  0,
+                                              "sms_campaigns_expanded_total":  2,
+                                              "sms_reconciler_heals_total":  0,
+                                              "sms_accounts_created_total":  0,
+                                              "sms_campaign_recipients_accepted_total":  0,
+                                              "sms_topup_credits_total":  0,
+                                              "sms_topups_total":  0,
+                                              "sms_campaign_messages_expanded_total":  6
+                                          },
+                    "outbox-relay":  {
+                                         "sms_campaigns_accepted_total":  0,
+                                         "sms_reconciler_heals_total":  0,
+                                         "sms_express_sla_missed_total":  0,
+                                         "sms_campaigns_expanded_total":  0,
+                                         "sms_outbox_relayed_total{priority=\"normal\"}":  23,
+                                         "sms_accounts_created_total":  0,
+                                         "sms_campaign_recipients_accepted_total":  0,
+                                         "sms_topup_credits_total":  0,
+                                         "sms_outbox_relayed_total{priority=\"express\"}":  2,
+                                         "sms_topups_total":  0,
+                                         "sms_campaign_messages_expanded_total":  0
+                                     }
+                },
+    "pass_count":  7,
+    "total_count":  7
+}

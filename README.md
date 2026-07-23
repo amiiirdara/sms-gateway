@@ -8,7 +8,7 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 
 **Repo:** https://github.com/amiiirdara/sms-gateway
 
-**Verified locally:** create → topup → normal/Express/`campaign` → `sent`; edge 402/AoN/exact-zero; k6 accept-path 20/s × 30s (see [load-test report](docs/load-test-report.md)); CI runs `go vet` + `go test -short` on every push.
+**Verified locally:** create → topup → normal/Express/`campaign` → `sent`; edge 402/AoN/exact-zero; E2E scenario suite 7/7 (see [scenario report](docs/scenario-report.md)); k6 accept-path 20/s × 30s (see [load-test report](docs/load-test-report.md)); CI runs `go vet` + `go test -short` on every push.
 
 ## Documentation
 
@@ -23,10 +23,11 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 | [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, API-key hashing, rate limits, Inbox, billing controls |
 | [docs/trade-offs.md](docs/trade-offs.md) | Deliberate non-goals; why 100M/day isn’t proven on Compose and what a real proof needs |
 | [docs/load-test-report.md](docs/load-test-report.md) | k6 accept-path scenario, thresholds, execution notes, and recorded run results |
+| [docs/scenario-report.md](docs/scenario-report.md) | E2E scenario suite (7 flows) with Prometheus deltas, worker scrapes, and charts |
 | [AGENTS.md](AGENTS.md) | Repo orientation for contributors / AI agents (layout, non-negotiables) |
 | [LICENSE](LICENSE) | MIT |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: `go vet` + `go test -short` on push/PR |
-| [Makefile](Makefile) | `make up` / `make test` / `make smoke` / `make load-test` |
+| [Makefile](Makefile) | `make up` / `make test` / `make smoke` / `make scenarios` / `make load-test` |
 
 ## What is implemented
 
@@ -54,19 +55,23 @@ make up
 
 Pinned infra tags: `postgres:16.6-alpine`, `redis:7.4-alpine`, `apache/kafka:3.7.0`, `clickhouse/clickhouse-server:24.8-alpine`, `migrate/migrate:v4.18.1`.
 
+> **Windows note:** If Adobe Connect (or another app) owns `127.0.0.1:8080`, use `http://[::1]:8080` for the API (and set `$env:BASE_URL` the same way for k6 / scenario scripts).
+
 ### End-to-end example (PowerShell)
 
 ```powershell
+$base = 'http://localhost:8080'   # or http://[::1]:8080 if 127.0.0.1:8080 is taken
+
 # 1. Create account
-$acc = Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/accounts `
+$acc = Invoke-RestMethod -Method Post -Uri "$base/v1/accounts" `
   -ContentType application/json -Body '{"name":"demo"}'
 $H = @{ Authorization = "Bearer $($acc.apiKey)"; "Content-Type" = "application/json" }
 
 # 2. Top up
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/topups -Headers $H -Body '{"amount":100}'
+Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H -Body '{"amount":100}'
 
 # 3. Send a normal SMS (E.164 or local Iranian mobile)
-$msg = Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/messages -Headers $H `
+$msg = Invoke-RestMethod -Method Post -Uri "$base/v1/messages" -Headers $H `
   -Body '{"to":"09121234567","text":"hello","priority":"normal"}'
 
 # 4. Poll status on reporting-api
@@ -130,12 +135,15 @@ make test-integration
 # Edge-case smoke (Compose stack must be up)
 make smoke
 
+# E2E scenario suite (7 flows → docs/scenario-report/; Compose stack must be up)
+make scenarios
+
 # Small accept-path load test (requires k6; Compose stack must be up)
 make load-test
 # See docs/load-test-report.md for scenario, thresholds, and recorded results
 ```
 
-Verified manually against Compose: create → topup → normal send → `sent`; Express → `sent`; campaign 3/3 `sent`; balance arithmetic correct.
+Verified against Compose: create → topup → normal/Express/campaign → `sent`; edge 402/AoN/exact-zero; [scenario suite 7/7](docs/scenario-report.md); [k6 accept-path](docs/load-test-report.md).
 
 ## Trade-offs / out of scope
 
@@ -150,7 +158,8 @@ Deliberately **not** built (see [docs/trade-offs.md](docs/trade-offs.md)): real 
 | Postgres | localhost:5432 (`sms`/`sms`, db `sms_gateway`) |
 | Redis | localhost:6379 |
 | Kafka (host) | localhost:9094 |
-| ClickHouse HTTP | http://localhost:8123 |
+| ClickHouse HTTP | http://localhost:8123 (`default` / `sms`) |
+| ClickHouse native | localhost:9000 (`CLICKHOUSE_PASSWORD=sms`) |
 
 ## Repo layout
 
@@ -165,7 +174,8 @@ db/migrations/       golang-migrate (Postgres source of truth)
 db/queries/          Hand-written SQL for sqlc
 clickhouse/init/     ClickHouse DDL
 openapi/             REST contract
-docs/                Reviewer guide, metrics, security checklist, diagrams, load report
+scripts/             smoke, k6, E2E scenario suite + chart generator
+docs/                Reviewer guide, metrics, security, trade-offs, load + scenario reports
 .github/workflows/   CI (go vet + go test -short)
 .cursor/rules|skills Agent conventions and recipes
 ```

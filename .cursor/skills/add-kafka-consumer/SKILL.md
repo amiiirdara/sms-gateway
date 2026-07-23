@@ -25,4 +25,4 @@ Follow `.cursor/rules/kafka-consumer-conventions.mdc` and `.cursor/rules/go-proj
 
 ## Reference
 
-See `ARCHITECTURE.md` sections 5 (Outbox/Inbox) and 8 (Component breakdown) for the design this pattern is implementing, and the existing `report-sink` / `billing-consumer` services (once implemented) as the canonical example to copy from.
+See `ARCHITECTURE.md` sections 5 (Outbox/Inbox) and 8 (Component breakdown) for the design this pattern is implementing, and the existing `report-sink` / `billing-consumer` / `dispatcher` services as the canonical examples to copy from.

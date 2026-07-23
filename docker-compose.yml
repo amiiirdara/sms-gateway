@@ -9,6 +9,7 @@ x-go-service: &go-service
     REDIS_ADDR: redis:6379
     KAFKA_BROKERS: kafka:9092
     CLICKHOUSE_ADDR: clickhouse:9000
+    CLICKHOUSE_PASSWORD: sms
     HTTP_ADDR: ":8080"
   depends_on:
     postgres:
@@ -75,6 +76,11 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_DB: sms_gateway
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: sms
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "8123:8123"
       - "9000:9000"

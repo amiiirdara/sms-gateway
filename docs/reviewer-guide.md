@@ -4,7 +4,7 @@ Quick path for challenge reviewers. Full design: [ARCHITECTURE.md](../ARCHITECTU
 
 ## Submission blurb (paste into the challenge form)
 
-> Multi-tenant SMS Gateway in Go (Kafka, Redis, Postgres, ClickHouse). Prepaid credit with atomic Redis Lua debit + Redis Streams outbox into Kafka; Inbox-deduped consumers for dispatch, billing, and reporting. Express lane with a 2-minute hard deadline (drop + refund). Campaigns are normal-priority, all-or-nothing. Tenant identity always from API key. Lean Docker Compose demo designed toward ~100M SMS/day (not load-proven at that scale). Docs: architecture, OpenAPI, Prometheus metrics catalog, security checklist, k6 accept-path report. Repo: https://github.com/amiiirdara/sms-gateway — start at `docs/reviewer-guide.md`.
+> Multi-tenant SMS Gateway in Go (Kafka, Redis, Postgres, ClickHouse). Prepaid credit with atomic Redis Lua debit + Redis Streams outbox into Kafka; Inbox-deduped consumers for dispatch, billing, and reporting. Express lane with a 2-minute hard deadline (drop + refund). Campaigns are normal-priority, all-or-nothing. Tenant identity always from API key. Lean Docker Compose demo designed toward ~100M SMS/day (not load-proven at that scale). Docs: architecture, OpenAPI, Prometheus metrics catalog, security checklist, E2E scenario report, k6 accept-path report. Repo: https://github.com/amiiirdara/sms-gateway — start at `docs/reviewer-guide.md`.
 
 ## 1. Start the stack (~2–3 min)
 
@@ -15,7 +15,7 @@ make up
 # or: docker compose up -d --build
 ```
 
-Infra images are pinned in `docker-compose.yml` (Postgres 16.6, Redis 7.4, Kafka 3.7.0, ClickHouse 24.8, migrate v4.18.1). Prefer a recent `master` tip for app images rebuilt from this repo.
+Infra images are pinned in `docker-compose.yml` (Postgres 16.6, Redis 7.4, Kafka 3.7.0, ClickHouse 24.8, migrate v4.18.1). Compose sets ClickHouse password `sms` (`CLICKHOUSE_PASSWORD`) for the `default` user. Prefer a recent `master` tip for app images rebuilt from this repo.
 
 Wait until services are up. Then:
 
@@ -25,18 +25,19 @@ Wait until services are up. Then:
 | http://localhost:8081 | Reporting API |
 | http://localhost:8080/healthz | Liveness |
 
-> **Windows note:** If Adobe Connect (or another app) owns `127.0.0.1:8080`, use `http://localhost:8080` (IPv6) or `http://[::1]:8080` for k6.
+> **Windows note:** If Adobe Connect (or another app) owns `127.0.0.1:8080`, use `http://[::1]:8080` (IPv6 loopback). PowerShell `http://localhost:8080` often works too (prefers IPv6).
 
 ## 2. Happy path smoke (~1 min)
 
 PowerShell:
 
 ```powershell
-$acc = Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/accounts `
+$base = 'http://localhost:8080'   # or http://[::1]:8080
+$acc = Invoke-RestMethod -Method Post -Uri "$base/v1/accounts" `
   -ContentType application/json -Body '{"name":"reviewer"}'
 $H = @{ Authorization = "Bearer $($acc.apiKey)"; "Content-Type" = "application/json" }
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/topups -Headers $H -Body '{"amount":10}'
-$msg = Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/messages -Headers $H `
+Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H -Body '{"amount":10}'
+$msg = Invoke-RestMethod -Method Post -Uri "$base/v1/messages" -Headers $H `
   -Body '{"to":"09121234567","text":"hello","priority":"normal"}'
 # Poll until status is sent
 Invoke-RestMethod -Method Get -Uri "http://localhost:8081/v1/messages/$($msg.messageId)" -Headers $H
@@ -48,20 +49,31 @@ Expect: create → topup → `accepted` → after a few seconds `sent`.
 
 ```powershell
 powershell -File scripts/smoke-edge.ps1
+# or: make smoke
 ```
 
 Covers insufficient funds (402), campaign all-or-nothing, spend-to-exact-zero.
 
-## 4. Optional: load test (~30 s)
+## 4. Optional: E2E scenario suite (~15 s)
+
+```powershell
+make scenarios
+# or: powershell -File scripts/run-scenario-suite.ps1
+```
+
+Seven flows (normal / Express / campaign / 402 / AoN / validation / burst) with Prometheus deltas and charts. Report: [scenario-report.md](scenario-report.md).
+
+## 5. Optional: load test (~30 s)
 
 ```powershell
 $env:BASE_URL = 'http://[::1]:8080'   # or http://localhost:8080
 k6 run scripts/load-accept.js
+# or: make load-test
 ```
 
 Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accepts, p95 &lt; 10 ms in recorded runs).
 
-## 5. What was verified
+## 6. What was verified
 
 | Check | Result |
 |---|---|
@@ -70,7 +82,8 @@ Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accept
 | Normal send → `sent` | OK |
 | Express send → `sent` | OK |
 | Campaign fan-out | OK |
-| Insufficient funds / AoN reject | OK (edge script) |
+| Insufficient funds / AoN reject | OK (edge script + scenario suite) |
+| E2E scenario suite (7/7) | PASS — see scenario report |
 | Accept-path load (k6) | PASS — see load-test report |
 | Unit tests | `go test ./internal/domain/... ./internal/platform/httpx/...` |
 | CI | GitHub Actions: `go vet` + `go test -short` |
@@ -85,6 +98,7 @@ Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accept
 | [security-ops-checklist.md](security-ops-checklist.md) | Tenant isolation, keys, rate limits, Inbox ([auth](../internal/platform/httpx/auth/auth.go)) |
 | [trade-offs.md](trade-offs.md) | Deliberate non-goals |
 | [architecture.svg](architecture.svg) | One-page system diagram |
+| [scenario-report.md](scenario-report.md) | E2E flows + metric charts |
 | [load-test-report.md](load-test-report.md) | k6 scenario + results |
 | [grafana-sms-gateway.json](grafana-sms-gateway.json) | Optional Grafana dashboard for `sms_*` |
 

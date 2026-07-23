@@ -9,7 +9,7 @@
 
 Validate that the **message accept path** (`POST /v1/messages`) sustains a modest constant arrival rate with low latency and near-zero errors, under prepaid balance debit + Redis outbox write.
 
-This is a **demo-scale** load test (not a 100M SMS/day capacity proof). It stresses API-gateway accept, not end-to-end operator delivery throughput.
+This is a **demo-scale** load test (not a 100M SMS/day capacity proof). It stresses API-gateway accept, not end-to-end operator delivery throughput. For multi-flow correctness (Express, campaigns, 402/AoN, validation), see [scenario-report.md](scenario-report.md).
 
 ## Environment
 

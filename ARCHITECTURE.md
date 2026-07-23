@@ -1,6 +1,6 @@
 # SMS Gateway - Architecture
 
-Status: **v1 — implemented and smoke-tested locally via Docker Compose.**
+Status: **v1 — implemented and verified locally via Docker Compose** (happy-path + edge smokes, [E2E scenario suite](docs/scenario-report.md), [k6 accept-path](docs/load-test-report.md)).
 
 ## 1. Overview
 
@@ -187,46 +187,53 @@ See [`openapi/openapi.yaml`](openapi/openapi.yaml) for the full machine-readable
 
 ## 11. Data model
 
-**Postgres** (all tables include `created_at`, `updated_at`):
+**Postgres** (mutable business tables include `created_at`, `updated_at`; Inbox is append-only):
 
 - `accounts(id, api_key_hash, name, balance, created_at, updated_at)`
 - `ledger_entries(id, account_id, type[topup|debit|refund], amount, message_id nullable, created_at, updated_at)`
 - `campaigns(id, account_id, text, total_recipients, cost_per_message, total_cost, status, created_at, updated_at)`
 - `messages(id, account_id, campaign_id nullable, recipient, priority, cost, status, operator, deadline_at nullable, created_at, updated_at, dispatched_at)`
 - `message_status_events(id, message_id, status, occurred_at, created_at, updated_at)`
-- `processed_events(consumer_name, event_id, processed_at, created_at)`
+- `processed_events(consumer_name, event_id, processed_at, created_at)` — append-only Inbox; no `updated_at`
 
 **Redis:** `balance:{account_id}`, `outbox:messages`, `outbox:campaigns`, `idem:{account_id}:{idempotency_key}`, `ratelimit:{account_id}`.
 
-**ClickHouse:** `message_events(event_time, message_id, account_id, campaign_id nullable, recipient, priority, status, cost, operator)`.
+**ClickHouse:** `message_events(event_time, message_id, account_id, campaign_id nullable, recipient, priority, status, cost, operator)` in database `sms_gateway`.
 
 See [`db/migrations/`](db/migrations) for the executable schema and [`clickhouse/init/`](clickhouse/init) for the ClickHouse table definition.
 
 ## 12. Tech stack
 
-- **HTTP:** `chi`
+- **HTTP:** Go stdlib `net/http` (`ServeMux` + middleware in `internal/platform/httpx`)
 - **Postgres:** `jackc/pgx` (driver/pool) + `sqlc` (compile-time typed queries) + `golang-migrate` (migrations). No GORM.
 - **Kafka:** `segmentio/kafka-go`
 - **Redis:** `redis/go-redis`
-- **ClickHouse:** `ClickHouse/clickhouse-go`
-- **Logging:** `zap`; **metrics:** Prometheus; **tracing:** OpenTelemetry (optional)
+- **ClickHouse:** `ClickHouse/clickhouse-go` (native protocol; Compose demo password via `CLICKHOUSE_PASSWORD`, default `sms`)
+- **Logging:** stdlib `log`; **metrics:** Prometheus (`sms_*` catalog in [docs/metrics.md](docs/metrics.md))
 
 ## 13. Cross-cutting concerns
 
 - **Idempotency:** `Idempotency-Key` header on `/v1/messages` and `/v1/campaigns`, deduped via Redis; internal Inbox tables for consumer-side dedup.
 - **Retries/DLQ:** exponential backoff in dispatchers; `sms.dlq` for exhausted retries.
-- **Observability:** per-topic consumer lag, per-tenant rate, Express SLA latency histograms by tier, campaign expansion throughput; structured logs correlated by `message_id`/`campaign_id`.
-- **Multi-operator routing:** pluggable `OperatorAdapter` interface + simple `Router` (stretch goal); one mock operator for the core build.
+- **Observability:** Prometheus business + pipeline metrics on api-gateway and workers (`METRICS_ADDR`); Express SLA / dispatch latency histograms; logs include service-level context (correlation by `message_id`/`campaign_id` where handlers emit it).
+- **Multi-operator routing:** pluggable `OperatorAdapter` interface + simple `Router`; one mock operator for the core build.
 - **Local/dev deployment:** single `docker-compose.yml` (see below).
 
 ## 14. Local development
 
 ```bash
-docker compose up -d          # Postgres, Redis, Kafka (KRaft), ClickHouse, operator-mock
-make migrate-up                # apply Postgres migrations
-make sqlc                      # regenerate typed queries
-make run-api-gateway            # etc. - see Makefile for all cmd/ targets
+make up                        # docker compose up -d --build (migrate service applies Postgres schema)
+# ClickHouse: default/sms (CLICKHOUSE_PASSWORD=sms); HTTP :8123, native :9000
+make sqlc                      # regenerate typed queries (requires sqlc CLI)
+make migrate-up                # re-run migrations against Compose Postgres
+go run ./cmd/api-gateway       # optional: run a binary on the host against Compose infra
 ```
+
+Host ports: api-gateway `8080`, reporting-api `8081`, Postgres `5432`, Redis `6379`, Kafka advertised host listener `9094`, ClickHouse HTTP `8123`.
+
+If another process owns `127.0.0.1:8080` (common on Windows with Adobe Connect), use `http://[::1]:8080`.
+
+Verification helpers: `make smoke`, `make scenarios` ([scenario report](docs/scenario-report.md)), `make load-test` ([load-test report](docs/load-test-report.md)).
 
 See the [README](README.md) for details, and [AGENTS.md](AGENTS.md) for repo conventions when working on this codebase with an AI agent.
 

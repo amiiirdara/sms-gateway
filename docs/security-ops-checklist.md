@@ -60,7 +60,8 @@ Verification aid for reviewers. These behaviors are implemented in code; this do
 
 | Control | Status | Guidance |
 |---|---|---|
-| Compose defaults (`sms`/`sms`) | Demo only | Change for any shared environment |
+| Compose Postgres (`sms`/`sms`) | Demo only | Change for any shared environment |
+| Compose ClickHouse (`default` / `sms` via `CLICKHOUSE_PASSWORD`) | Demo only | Required by ClickHouse 24.8 image; app uses `NewWithPassword` |
 | No secrets in git | Yes | Use env / Compose env files locally |
 
 ## Quick review commands
@@ -71,6 +72,9 @@ go test ./internal/domain/... ./internal/platform/httpx/... -count=1
 
 # Edge smokes (stack up)
 powershell -File scripts/smoke-edge.ps1
+
+# Full E2E scenario suite (stack up) → docs/scenario-report/
+make scenarios
 
 # Sample metrics
 curl -s http://localhost:8080/metrics | findstr sms_

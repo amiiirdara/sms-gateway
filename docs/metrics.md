@@ -20,6 +20,8 @@ Source of truth for definitions: [`internal/platform/metrics/metrics.go`](../int
 
 Optional Grafana import: [`docs/grafana-sms-gateway.json`](grafana-sms-gateway.json) (Prometheus datasource; scrape api-gateway `:8080/metrics` and worker `:9090` if published).
 
+Recorded E2E scrape deltas + charts from a local suite run: [scenario-report.md](scenario-report.md) (`make scenarios`).
+
 Instrumentation call sites: [`cmd/api-gateway`](../cmd/api-gateway/main.go), [`cmd/dispatcher`](../cmd/dispatcher/main.go), [`cmd/outbox-relay`](../cmd/outbox-relay/main.go), [`cmd/billing-consumer`](../cmd/billing-consumer/main.go), [`cmd/report-sink`](../cmd/report-sink/main.go), [`cmd/campaign-expander`](../cmd/campaign-expander/main.go), [`cmd/reconciler`](../cmd/reconciler/main.go).
 
 ---

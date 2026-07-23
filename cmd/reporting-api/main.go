@@ -38,7 +38,7 @@ func main() {
 		log.Fatalf("reporting-api: redis: %v", err)
 	}
 	defer rdb.Close()
-	ch, err := platch.New(ctx, cfg.ClickHouseAddr)
+	ch, err := platch.NewWithPassword(ctx, cfg.ClickHouseAddr, cfg.ClickHousePassword)
 	if err != nil {
 		log.Fatalf("reporting-api: clickhouse: %v", err)
 	}

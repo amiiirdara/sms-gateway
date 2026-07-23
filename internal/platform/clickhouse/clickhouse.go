@@ -19,12 +19,17 @@ type Client struct {
 
 // New connects to ClickHouse using the native protocol address (host:9000).
 func New(ctx context.Context, addr string) (*Client, error) {
+	return NewWithPassword(ctx, addr, "")
+}
+
+// NewWithPassword connects with an explicit password (Compose demo uses "sms").
+func NewWithPassword(ctx context.Context, addr, password string) (*Client, error) {
 	conn, err := ch.Open(&ch.Options{
 		Addr: []string{addr},
 		Auth: ch.Auth{
 			Database: "sms_gateway",
 			Username: "default",
-			Password: "",
+			Password: password,
 		},
 		DialTimeout: 5 * time.Second,
 	})

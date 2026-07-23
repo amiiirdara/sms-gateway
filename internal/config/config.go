@@ -1,9 +1,7 @@
 // Package config loads runtime configuration from the environment.
 //
-// Kept dependency-free (stdlib only) at scaffold stage; extend as each
-// service gains real logic. See ARCHITECTURE.md section 12 for the intended
-// tech stack once real platform clients (pgx, go-redis, kafka-go,
-// clickhouse-go) are wired in.
+// Kept dependency-free (stdlib only). Defaults match the Compose demo stack
+// (see ARCHITECTURE.md section 14 and docker-compose.yml).
 package config
 
 import (
@@ -19,7 +17,8 @@ type Config struct {
 	DatabaseURL    string
 	RedisAddr      string
 	KafkaBrokers   string
-	ClickHouseAddr string
+	ClickHouseAddr     string
+	ClickHousePassword string
 
 	// SignupRateLimit: open POST /v1/accounts per client IP (token bucket).
 	SignupRateCapacity int64
@@ -41,6 +40,7 @@ func Load(serviceName string) Config {
 		RedisAddr:          getEnv("REDIS_ADDR", "localhost:6379"),
 		KafkaBrokers:       getEnv("KAFKA_BROKERS", "localhost:9092"),
 		ClickHouseAddr:     getEnv("CLICKHOUSE_ADDR", "localhost:9000"),
+		ClickHousePassword: getEnv("CLICKHOUSE_PASSWORD", "sms"),
 		SignupRateCapacity: getEnvInt64("SIGNUP_RATE_CAPACITY", 30),
 		SignupRateRefill:   getEnvFloat("SIGNUP_RATE_REFILL_PER_SEC", 0.5), // ~30/min steady
 		IngestRateCapacity: getEnvInt64("INGEST_RATE_CAPACITY", 500),

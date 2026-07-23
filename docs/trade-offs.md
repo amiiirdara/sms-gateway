@@ -35,7 +35,7 @@ This project is a **lean, demo-scale Compose build** designed so each piece *can
 | Separate load gen (k6/vegeta fleet) aimed at accept **and** end-to-end drain | Accept-only proof ≠ dispatch/billing capacity |
 | Observability (Prometheus/Grafana + dashboards from [docs/metrics.md](metrics.md)) | Extra stack; needed to trust the run |
 
-**Sensible middle ground for this challenge:** keep architecture claims, show the accept-path k6 + metrics catalog, and treat 100M/day as a **design target**, not a measured demo.
+**Sensible middle ground for this challenge:** keep architecture claims, show the [E2E scenario suite](scenario-report.md) + accept-path k6 + [metrics catalog](metrics.md), and treat 100M/day as a **design target**, not a measured demo.
 
 ## Platform polish
 
@@ -52,6 +52,6 @@ This project is a **lean, demo-scale Compose build** designed so each piece *can
 - Outbox + Inbox so debit and “why” cannot diverge silently
 - Express hard deadline + refund
 - Tenant isolation from API key
-- Clear architecture docs, OpenAPI, metrics catalog, and a small k6 accept-path test
+- Clear architecture docs, OpenAPI, metrics catalog, E2E scenario suite, and a small k6 accept-path test
 
 If something is missing from this list and you need it for production, treat this repo as the **reference architecture + working vertical slice**, not a turnkey carrier gateway.

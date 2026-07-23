@@ -122,6 +122,11 @@ var (
 		Name: "sms_reconciler_heals_total",
 		Help: "Auto-heals applied (Redis > ledger only; Redis set down to ledger)",
 	})
+
+	RateLimited = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sms_rate_limited_total",
+		Help: "Requests rejected by token-bucket rate limits",
+	}, []string{"scope"}) // signup|ingest
 )
 
 // --- Technical / pipeline metrics ---

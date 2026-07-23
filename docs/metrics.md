@@ -18,6 +18,10 @@ In Docker Compose, worker metrics ports are **not** published to the host by def
 
 Source of truth for definitions: [`internal/platform/metrics/metrics.go`](../internal/platform/metrics/metrics.go).
 
+Optional Grafana import: [`docs/grafana-sms-gateway.json`](grafana-sms-gateway.json) (Prometheus datasource; scrape api-gateway `:8080/metrics` and worker `:9090` if published).
+
+Instrumentation call sites: [`cmd/api-gateway`](../cmd/api-gateway/main.go), [`cmd/dispatcher`](../cmd/dispatcher/main.go), [`cmd/outbox-relay`](../cmd/outbox-relay/main.go), [`cmd/billing-consumer`](../cmd/billing-consumer/main.go), [`cmd/report-sink`](../cmd/report-sink/main.go), [`cmd/campaign-expander`](../cmd/campaign-expander/main.go), [`cmd/reconciler`](../cmd/reconciler/main.go).
+
 ---
 
 ## Business / domain metrics
@@ -100,8 +104,9 @@ These answer ops questions: latency, duplicates, retries, HTTP health.
 | Metric | Type | Labels | Meaning | Emitted by |
 |---|---|---|---|---|
 | `sms_http_request_duration_seconds` | histogram | `method`, `path`, `status` | Handler wall time by route template | api-gateway |
+| `sms_rate_limited_total` | counter | `scope` (`signup`\|`ingest`) | Token-bucket 429s | api-gateway |
 
-`path` is a **low-cardinality template** (`/v1/messages`, `/v1/campaigns`, …), never raw URLs with IDs.
+`path` is a **low-cardinality template** (`/v1/messages`, `/v1/campaigns`, …), never raw URLs with IDs. Rate-limit implementation: [`httpx/ratelimit`](../internal/platform/httpx/ratelimit/ratelimit.go) + Redis [`TakeToken`](../internal/platform/redis/ratelimit.go).
 
 ### Outbox → Kafka
 

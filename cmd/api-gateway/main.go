@@ -14,6 +14,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
 	"github.com/amiri/sms-gateway/internal/platform/httpx"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
+	"github.com/amiri/sms-gateway/internal/platform/httpx/ratelimit"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
 	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
@@ -41,6 +42,14 @@ func main() {
 	msgSvc := messaging.New(rdb)
 	campSvc := campaigns.New(rdb)
 	authMw := auth.Middleware(billingSvc.Queries())
+	signupLimit := ratelimit.ByIP(rdb, ratelimit.Config{
+		Capacity:     cfg.SignupRateCapacity,
+		RefillPerSec: cfg.SignupRateRefill,
+	}, "signup")
+	ingestLimit := ratelimit.ByAccount(rdb, ratelimit.Config{
+		Capacity:     cfg.IngestRateCapacity,
+		RefillPerSec: cfg.IngestRateRefill,
+	}, "ingest")
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler())
@@ -49,7 +58,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.Handle("POST /v1/accounts", metrics.InstrumentHTTP("/v1/accounts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/accounts", metrics.InstrumentHTTP("/v1/accounts", signupLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name string `json:"name"`
 		}
@@ -67,7 +76,7 @@ func main() {
 			"accountId": res.AccountID.String(),
 			"apiKey":    res.APIKey,
 		})
-	})))
+	}))))
 
 	mux.Handle("POST /v1/topups", metrics.InstrumentHTTP("/v1/topups", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
@@ -98,7 +107,7 @@ func main() {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balance": bal})
 	}))))
 
-	mux.Handle("POST /v1/messages", metrics.InstrumentHTTP("/v1/messages", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/messages", metrics.InstrumentHTTP("/v1/messages", authMw(ingestLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
 			To       string `json:"to"`
@@ -137,9 +146,9 @@ func main() {
 		metrics.MessagesAccepted.WithLabelValues(priority).Inc()
 		metrics.CreditsSpent.WithLabelValues(priority, "single").Add(float64(resp.Cost))
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
-	}))))
+	})))))
 
-	mux.Handle("POST /v1/campaigns", metrics.InstrumentHTTP("/v1/campaigns", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/campaigns", metrics.InstrumentHTTP("/v1/campaigns", authMw(ingestLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
 			Text       string   `json:"text"`
@@ -174,7 +183,7 @@ func main() {
 		metrics.CampaignRecipientsAccepted.Add(float64(resp.TotalRecipients))
 		metrics.CreditsSpent.WithLabelValues(messaging.PriorityNormal, "campaign").Add(float64(resp.Cost))
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
-	}))))
+	})))))
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 	go func() {

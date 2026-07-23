@@ -6,7 +6,7 @@ Verification aid for reviewers. These behaviors are implemented in code; this do
 
 | Control | Status | Where |
 |---|---|---|
-| `account_id` resolved from API key only (never path/query/body) | Yes | `internal/platform/httpx/auth`, api-gateway / reporting-api handlers |
+| `account_id` resolved from API key only (never path/query/body) | Yes | [`internal/platform/httpx/auth`](../internal/platform/httpx/auth/auth.go), api-gateway / reporting-api handlers |
 | By-ID lookups filter by authenticated `account_id` | Yes | reporting queries / handlers |
 | Cross-tenant resource → **404** (not 403) | Yes | Same lookups (no existence leak) |
 | Kafka partition key = `account_id` (fairness under skew) | Yes | outbox-relay / campaign-expander publish |
@@ -24,7 +24,8 @@ Verification aid for reviewers. These behaviors are implemented in code; this do
 | Control | Status | Where |
 |---|---|---|
 | `POST /v1/accounts` unauthenticated (intentional) | Yes | api-gateway |
-| Abuse control on open signup | **Partial** | Redis `ratelimit:` key helper exists; full token-bucket middleware not wired yet — add before production |
+| Abuse control on open signup | Yes | Redis token bucket by **RemoteAddr** IP — [`ratelimit.ByIP`](../internal/platform/httpx/ratelimit/ratelimit.go); set `TRUST_PROXY=1` only behind a real reverse proxy that sets XFF |
+| Per-tenant ingest rate limit | Yes | Same bucket on `POST /v1/messages` and `/v1/campaigns` after auth (`INGEST_RATE_*`) |
 
 ## Balance & billing
 
@@ -41,10 +42,10 @@ Verification aid for reviewers. These behaviors are implemented in code; this do
 
 | Control | Status | Where |
 |---|---|---|
-| Debit + outbox entry atomic in Redis | Yes | accept Lua |
-| Consumers Inbox-check before side effects | Yes | dispatcher, billing, report-sink |
+| Debit + outbox entry atomic in Redis | Yes | accept Lua in [`internal/platform/redis/redis.go`](../internal/platform/redis/redis.go) |
+| Consumers Inbox-check before side effects | Yes | [`internal/platform/inbox`](../internal/platform/inbox), dispatcher, billing, report-sink |
 | Duplicate deliveries skipped | Yes | `processed_events` / inbox package |
-| Express deadline checked at dispatch time | Yes | dispatcher express mode |
+| Express deadline checked at dispatch time | Yes | [`cmd/dispatcher`](../cmd/dispatcher/main.go) express mode |
 
 ## Observability & ops
 

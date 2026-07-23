@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
@@ -39,6 +41,8 @@ func main() {
 
 	billingSvc := billing.New(pool, rdb)
 	inboxStore := inbox.New(pool)
+
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
 	// Debits come from accepted messages on outbound topics; refunds from dispatch-results.
 	normalR := platkafka.NewReader(cfg.KafkaBrokers, platkafka.TopicOutboundNormal, "billing-debit")
@@ -72,6 +76,7 @@ func consumeDebits(ctx context.Context, reader *kafkago.Reader, inboxStore *inbo
 			continue
 		}
 		if err := recordDebit(ctx, inboxStore, billingSvc, consumerName, ev); err != nil {
+			metrics.ConsumerHandleErrors.WithLabelValues(consumerName).Inc()
 			log.Printf("billing-consumer: debit: %v", err)
 			continue
 		}
@@ -82,6 +87,7 @@ func consumeDebits(ctx context.Context, reader *kafkago.Reader, inboxStore *inbo
 func recordDebit(ctx context.Context, inboxStore *inbox.Store, billingSvc *billing.Service, consumerName string, ev messaging.AcceptedMessage) error {
 	tx, qtx, err := inboxStore.TryBegin(ctx, consumerName, ev.MessageID+":debit")
 	if inbox.IsAlreadyProcessed(err) {
+		metrics.InboxDuplicates.WithLabelValues(consumerName).Inc()
 		return nil
 	}
 	if err != nil {
@@ -100,7 +106,16 @@ func recordDebit(ctx context.Context, inboxStore *inbox.Store, billingSvc *billi
 	if err := billingSvc.RecordDebit(ctx, qtx, accountID, messageID, ev.Cost); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	priority := ev.Priority
+	if priority == "" {
+		priority = messaging.PriorityNormal
+	}
+	metrics.InboxProcessed.WithLabelValues(consumerName).Inc()
+	metrics.LedgerDebits.WithLabelValues(priority).Inc()
+	return nil
 }
 
 func consumeRefunds(ctx context.Context, reader *kafkago.Reader, inboxStore *inbox.Store, billingSvc *billing.Service) {
@@ -125,6 +140,7 @@ func consumeRefunds(ctx context.Context, reader *kafkago.Reader, inboxStore *inb
 			continue
 		}
 		if err := recordRefund(ctx, inboxStore, billingSvc, ev); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			metrics.ConsumerHandleErrors.WithLabelValues("billing-refund").Inc()
 			log.Printf("billing-consumer: refund: %v", err)
 			continue
 		}
@@ -133,8 +149,10 @@ func consumeRefunds(ctx context.Context, reader *kafkago.Reader, inboxStore *inb
 }
 
 func recordRefund(ctx context.Context, inboxStore *inbox.Store, billingSvc *billing.Service, ev messaging.DispatchResult) error {
-	tx, qtx, err := inboxStore.TryBegin(ctx, "billing-refund", ev.MessageID+":refund")
+	const consumer = "billing-refund"
+	tx, qtx, err := inboxStore.TryBegin(ctx, consumer, ev.MessageID+":refund")
 	if inbox.IsAlreadyProcessed(err) {
+		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
 		return nil
 	}
 	if err != nil {
@@ -153,5 +171,18 @@ func recordRefund(ctx context.Context, inboxStore *inbox.Store, billingSvc *bill
 	if err := billingSvc.RecordRefund(ctx, qtx, accountID, messageID, ev.Cost); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	metrics.InboxProcessed.WithLabelValues(consumer).Inc()
+	metrics.LedgerRefunds.WithLabelValues(ev.Status).Inc()
+	metrics.CreditsRefunded.WithLabelValues(ev.Status).Add(float64(ev.Cost))
+	return nil
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

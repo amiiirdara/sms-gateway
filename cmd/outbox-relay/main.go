@@ -13,6 +13,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	goredis "github.com/redis/go-redis/v9"
 	kafkago "github.com/segmentio/kafka-go"
@@ -47,6 +48,8 @@ func main() {
 		log.Fatalf("outbox-relay: consumer: %v", err)
 	}
 
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
+
 	log.Println("outbox-relay: started")
 	for {
 		select {
@@ -59,6 +62,7 @@ func main() {
 		if msgs, err := consumer.ClaimStale(ctx, 30*time.Second, 10); err == nil {
 			for _, m := range msgs {
 				if err := publishOne(ctx, m, normalW, expressW); err != nil {
+					metrics.OutboxRelayErrors.WithLabelValues("claim_publish").Inc()
 					log.Printf("outbox-relay: claim publish: %v", err)
 					continue
 				}
@@ -74,10 +78,12 @@ func main() {
 		}
 		for _, m := range msgs {
 			if err := publishOne(ctx, m, normalW, expressW); err != nil {
+				metrics.OutboxRelayErrors.WithLabelValues("publish").Inc()
 				log.Printf("outbox-relay: publish: %v", err)
 				continue
 			}
 			if err := consumer.Ack(ctx, m.ID); err != nil {
+				metrics.OutboxRelayErrors.WithLabelValues("ack").Inc()
 				log.Printf("outbox-relay: ack: %v", err)
 			}
 		}
@@ -115,5 +121,20 @@ func publishOne(ctx context.Context, m goredis.XMessage, normalW, expressW *kafk
 	if ev.Priority == messaging.PriorityExpress {
 		w = expressW
 	}
-	return platkafka.Publish(ctx, w, []byte(ev.AccountID), payload)
+	if err := platkafka.Publish(ctx, w, []byte(ev.AccountID), payload); err != nil {
+		return err
+	}
+	priority := ev.Priority
+	if priority == "" {
+		priority = messaging.PriorityNormal
+	}
+	metrics.OutboxRelayed.WithLabelValues(priority).Inc()
+	return nil
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
@@ -53,6 +54,7 @@ func main() {
 	}
 
 	log.Println("campaign-expander: started")
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
 	for {
 		select {
 		case <-ctx.Done():
@@ -183,5 +185,14 @@ func expandOne(ctx context.Context, pool *pgxpool.Pool, q *sqlc.Queries, normalW
 			return err
 		}
 	}
+	metrics.CampaignsExpanded.Inc()
+	metrics.CampaignMessagesExpanded.Add(float64(len(recipients)))
 	return nil
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

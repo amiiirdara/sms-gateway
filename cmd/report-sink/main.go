@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -41,6 +43,8 @@ func main() {
 	reader := platkafka.NewReader(cfg.KafkaBrokers, platkafka.TopicDispatchResults, "report-sink")
 	defer reader.Close()
 
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
+
 	log.Println("report-sink: started")
 	for {
 		msg, err := reader.FetchMessage(ctx)
@@ -54,6 +58,7 @@ func main() {
 			continue
 		}
 		if err := handle(ctx, msg, inboxStore, ch); err != nil {
+			metrics.ConsumerHandleErrors.WithLabelValues("report-sink").Inc()
 			log.Printf("report-sink: handle: %v", err)
 			continue
 		}
@@ -69,6 +74,7 @@ func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, c
 
 	tx, qtx, err := inboxStore.TryBegin(ctx, "report-sink", ev.MessageID+":report")
 	if inbox.IsAlreadyProcessed(err) {
+		metrics.InboxDuplicates.WithLabelValues("report-sink").Inc()
 		return nil
 	}
 	if err != nil {
@@ -125,5 +131,17 @@ func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, c
 	}); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	metrics.InboxProcessed.WithLabelValues("report-sink").Inc()
+	metrics.ReportEvents.WithLabelValues(ev.Status).Inc()
+	return nil
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

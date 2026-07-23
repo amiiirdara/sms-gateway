@@ -4,11 +4,13 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
 	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 )
@@ -30,6 +32,8 @@ func main() {
 	defer rdb.Close()
 
 	billingSvc := billing.New(pool, rdb)
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -66,15 +70,26 @@ func runOnce(ctx context.Context, billingSvc *billing.Service, rdb *platredis.Cl
 		switch {
 		case redisBal > ledger:
 			// Dangerous free-credit direction: auto-heal Redis down.
+			metrics.ReconcilerDrift.WithLabelValues("redis_gt_ledger").Inc()
 			log.Printf("reconciler: ALERT redis>%s ledger for %s (redis=%d ledger=%d); healing redis down",
 				"ledger", id, redisBal, ledger)
 			if err := rdb.SetBalance(ctx, id.String(), ledger); err != nil {
 				log.Printf("reconciler: heal failed: %v", err)
+			} else {
+				metrics.ReconcilerHeals.Inc()
 			}
 		case redisBal < ledger:
 			// Safe/expected lag direction: alert only.
+			metrics.ReconcilerDrift.WithLabelValues("redis_lt_ledger").Inc()
 			log.Printf("reconciler: WARN redis<ledger for %s (redis=%d ledger=%d); not auto-healing",
 				id, redisBal, ledger)
 		}
 	}
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

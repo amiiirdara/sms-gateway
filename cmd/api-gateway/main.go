@@ -49,7 +49,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("POST /v1/accounts", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/accounts", metrics.InstrumentHTTP("/v1/accounts", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name string `json:"name"`
 		}
@@ -62,13 +62,14 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		metrics.AccountsCreated.Inc()
 		httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 			"accountId": res.AccountID.String(),
 			"apiKey":    res.APIKey,
 		})
-	})
+	})))
 
-	mux.Handle("POST /v1/topups", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/topups", metrics.InstrumentHTTP("/v1/topups", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
 			Amount int64 `json:"amount"`
@@ -82,10 +83,12 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		metrics.TopupsTotal.Inc()
+		metrics.TopupCredits.Add(float64(body.Amount))
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balance": bal})
-	})))
+	}))))
 
-	mux.Handle("GET /v1/balance", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /v1/balance", metrics.InstrumentHTTP("/v1/balance", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		bal, err := billingSvc.Balance(r.Context(), acc.ID)
 		if err != nil {
@@ -93,9 +96,9 @@ func main() {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balance": bal})
-	})))
+	}))))
 
-	mux.Handle("POST /v1/messages", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/messages", metrics.InstrumentHTTP("/v1/messages", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
 			To       string `json:"to"`
@@ -106,6 +109,11 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
+		priority := body.Priority
+		if priority == "" {
+			priority = messaging.PriorityNormal
+		}
+		start := time.Now()
 		resp, err := msgSvc.Accept(r.Context(), messaging.AcceptRequest{
 			AccountID:      acc.ID,
 			To:             body.To,
@@ -114,20 +122,24 @@ func main() {
 			IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		})
 		if errors.Is(err, messaging.ErrInsufficientFunds) {
+			metrics.AcceptDuration.WithLabelValues(priority, "rejected").Observe(time.Since(start).Seconds())
 			metrics.MessagesRejected.WithLabelValues("insufficient_funds").Inc()
 			httpx.Error(w, http.StatusPaymentRequired, "insufficient funds")
 			return
 		}
 		if err != nil {
+			metrics.AcceptDuration.WithLabelValues(priority, "error").Observe(time.Since(start).Seconds())
 			metrics.MessagesRejected.WithLabelValues("validation").Inc()
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		metrics.MessagesAccepted.WithLabelValues(body.Priority).Inc()
+		metrics.AcceptDuration.WithLabelValues(priority, "accepted").Observe(time.Since(start).Seconds())
+		metrics.MessagesAccepted.WithLabelValues(priority).Inc()
+		metrics.CreditsSpent.WithLabelValues(priority, "single").Add(float64(resp.Cost))
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
-	})))
+	}))))
 
-	mux.Handle("POST /v1/campaigns", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /v1/campaigns", metrics.InstrumentHTTP("/v1/campaigns", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
 			Text       string   `json:"text"`
@@ -145,7 +157,7 @@ func main() {
 		})
 		var insuf *campaigns.InsufficientFundsError
 		if errors.As(err, &insuf) {
-			metrics.MessagesRejected.WithLabelValues("campaign_insufficient_funds").Inc()
+			metrics.CampaignsRejected.WithLabelValues("insufficient_funds").Inc()
 			httpx.WriteJSON(w, http.StatusPaymentRequired, map[string]any{
 				"error":     "insufficient funds",
 				"required":  insuf.Required,
@@ -154,13 +166,15 @@ func main() {
 			return
 		}
 		if err != nil {
-			metrics.MessagesRejected.WithLabelValues("campaign_validation").Inc()
+			metrics.CampaignsRejected.WithLabelValues("validation").Inc()
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		metrics.CampaignsAccepted.Inc()
+		metrics.CampaignRecipientsAccepted.Add(float64(resp.TotalRecipients))
+		metrics.CreditsSpent.WithLabelValues(messaging.PriorityNormal, "campaign").Add(float64(resp.Cost))
 		httpx.WriteJSON(w, http.StatusAccepted, resp)
-	})))
+	}))))
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 	go func() {

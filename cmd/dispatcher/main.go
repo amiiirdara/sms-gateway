@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -65,15 +64,7 @@ func main() {
 		operator.NewHTTPAdapter("rightel", env("OPERATOR_URL_RIGHTEL", mockURL)),
 	}, operator.DefaultIranRules())
 
-	metricsAddr := env("METRICS_ADDR", ":9090")
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("GET /metrics", metrics.Handler())
-		log.Printf("dispatcher: metrics on %s", metricsAddr)
-		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
-			log.Printf("dispatcher: metrics server: %v", err)
-		}
-	}()
+	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
 	log.Printf("dispatcher: started mode=%s topic=%s", *mode, topic)
 	for {
@@ -88,6 +79,7 @@ func main() {
 			continue
 		}
 		if err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router); err != nil {
+			metrics.ConsumerHandleErrors.WithLabelValues("dispatcher-"+*mode).Inc()
 			log.Printf("dispatcher: handle: %v", err)
 			continue
 		}
@@ -112,8 +104,10 @@ func handle(
 	}
 	eventID := ev.MessageID + ":dispatch"
 
-	tx, qtx, err := inboxStore.TryBegin(ctx, "dispatcher-"+mode, eventID)
+	consumer := "dispatcher-" + mode
+	tx, qtx, err := inboxStore.TryBegin(ctx, consumer, eventID)
 	if inbox.IsAlreadyProcessed(err) {
+		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
 		return nil
 	}
 	if err != nil {
@@ -127,11 +121,17 @@ func handle(
 
 	if mode == "express" && messaging.ExpressExpired(ev.Deadline, now) {
 		status = "expired_sla_missed"
+		metrics.ExpressSLAMissed.Inc()
+		metrics.OperatorSendDuration.WithLabelValues("none", "skipped_sla").Observe(0)
 	} else {
+		opStart := time.Now()
 		name, sendErr := router.Send(ctx, ev.To, ev.Text, ev.Priority)
 		operatorName = name
 		if sendErr != nil {
 			status = "failed"
+			metrics.OperatorSendDuration.WithLabelValues(operatorName, "error").Observe(time.Since(opStart).Seconds())
+		} else {
+			metrics.OperatorSendDuration.WithLabelValues(operatorName, "ok").Observe(time.Since(opStart).Seconds())
 		}
 	}
 
@@ -196,6 +196,7 @@ func handle(
 		return err
 	}
 
+	metrics.InboxProcessed.WithLabelValues(consumer).Inc()
 	metrics.DispatchTotal.WithLabelValues(mode, status, operatorName).Inc()
 	if !ev.AcceptedAt.IsZero() {
 		metrics.DispatchLatency.WithLabelValues(mode, ev.Priority).Observe(now.Sub(ev.AcceptedAt).Seconds())

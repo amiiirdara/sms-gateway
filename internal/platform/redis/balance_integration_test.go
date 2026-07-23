@@ -127,3 +127,83 @@ func TestCheckAndDebitExactZeroAndRace(t *testing.T) {
 		t.Fatalf("balance after race=%d want 0", bal)
 	}
 }
+
+func TestCheckAndDebitCampaignAllOrNothing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	req := testcontainers.ContainerRequest{
+		Image:        "redis:7-alpine",
+		ExposedPorts: []string{"6379/tcp"},
+		WaitingFor:   wait.ForLog("Ready to accept connections"),
+	}
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Skipf("docker unavailable: %v", err)
+	}
+	defer func() { _ = c.Terminate(ctx) }()
+
+	host, err := c.Host(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := c.MappedPort(ctx, "6379")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb, err := platredis.NewClient(ctx, host+":"+port.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+
+	accountID := "acct-camp-1"
+	if err := rdb.SetBalance(ctx, accountID, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Need 3 credits, only 2 available → reject entire campaign, balance unchanged.
+	fail, err := rdb.CheckAndDebitCampaign(ctx, platredis.CampaignOutboxFields{
+		AccountID:      accountID,
+		CampaignID:     "camp-1",
+		Text:           "hello",
+		TotalCost:      3,
+		CostPerMessage: 1,
+		RecipientsJSON: `["+989121111111","+989122222222","+989123333333"]`,
+		AcceptedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fail.OK {
+		t.Fatal("expected campaign rejection on insufficient funds")
+	}
+	bal, err := rdb.GetBalance(ctx, accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal != 2 {
+		t.Fatalf("balance should be unchanged after reject, got %d", bal)
+	}
+
+	// Exact fit: 2 recipients with balance 2 → accept and zero out.
+	ok, err := rdb.CheckAndDebitCampaign(ctx, platredis.CampaignOutboxFields{
+		AccountID:      accountID,
+		CampaignID:     "camp-2",
+		Text:           "hello",
+		TotalCost:      2,
+		CostPerMessage: 1,
+		RecipientsJSON: `["+989121111111","+989122222222"]`,
+		AcceptedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok.OK || ok.NewBalance != 0 {
+		t.Fatalf("expected exact campaign accept to zero, got %+v", ok)
+	}
+}

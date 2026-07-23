@@ -109,12 +109,9 @@ func handle(
 	status := "sent"
 	operator := "mock"
 
-	if mode == "express" && ev.Deadline != "" {
-		deadline, err := time.Parse(time.RFC3339Nano, ev.Deadline)
-		if err == nil && now.After(deadline) {
-			status = "expired_sla_missed"
-			operator = ""
-		}
+	if mode == "express" && messaging.ExpressExpired(ev.Deadline, now) {
+		status = "expired_sla_missed"
+		operator = ""
 	}
 
 	if status != "expired_sla_missed" {

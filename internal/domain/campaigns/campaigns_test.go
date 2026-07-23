@@ -1,6 +1,7 @@
 package campaigns_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/amiri/sms-gateway/internal/domain/campaigns"
@@ -23,5 +24,15 @@ func TestDeterministicMessageIDStable(t *testing.T) {
 func TestMaxRecipientsConstant(t *testing.T) {
 	if campaigns.MaxRecipients != 10000 {
 		t.Fatalf("MaxRecipients=%d", campaigns.MaxRecipients)
+	}
+}
+
+func TestInsufficientFundsError(t *testing.T) {
+	err := &campaigns.InsufficientFundsError{Required: 5, Available: 2}
+	if !errors.Is(err, campaigns.ErrInsufficientFunds) {
+		t.Fatal("expected unwrap to ErrInsufficientFunds")
+	}
+	if err.Error() != campaigns.ErrInsufficientFunds.Error() {
+		t.Fatalf("error text=%q", err.Error())
 	}
 }

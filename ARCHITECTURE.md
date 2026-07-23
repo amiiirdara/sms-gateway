@@ -1,6 +1,6 @@
 # SMS Gateway - Architecture
 
-Status: **v1 - implementation in progress (vertical slices 0–5 wired; tests ongoing).**
+Status: **v1 — implemented and smoke-tested locally via Docker Compose.**
 
 ## 1. Overview
 

@@ -1,26 +1,32 @@
 # SMS Gateway
 
+[![CI](https://github.com/amiiirdara/sms-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/amiiirdara/sms-gateway/actions/workflows/ci.yml)
+
 A multi-tenant SMS Gateway for the [ArvanCloud software developer challenge](https://github.com/amiiirdara/sms-gateway): send SMS via REST against a prepaid credit balance, with a guaranteed-SLA **Express** lane and batch **campaign** sending.
 
 Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in Go with Kafka, Redis, PostgreSQL, and ClickHouse.
 
 **Repo:** https://github.com/amiiirdara/sms-gateway
 
+**Verified locally:** create → topup → normal/Express/`campaign` → `sent`; edge 402/AoN/exact-zero; k6 accept-path 20/s × 30s (see [load-test report](docs/load-test-report.md)); CI runs `go vet` + `go test -short` on every push.
+
 ## Documentation
 
 | Doc | Brief |
 |---|---|
-| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here** — Compose up, smoke, edge script, k6, and what was verified (~5 min) |
+| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here** — submission blurb, Compose up, smoke, edge script, k6 (~5 min) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full system design: Outbox/Inbox, Express SLA, campaigns, data model, API surface |
 | [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png) | One-page visual of the accept → Kafka → dispatch / billing / reports flow |
 | [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract (paths, auth, request/response schemas) |
-| [docs/metrics.md](docs/metrics.md) | Prometheus catalog — business metrics (credits, accept, SLA) and technical metrics (HTTP, outbox, Inbox) |
-| [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, API-key hashing, Inbox idempotency, billing/reconciler controls |
+| [docs/metrics.md](docs/metrics.md) | Prometheus catalog — business + technical metrics ([code](internal/platform/metrics/metrics.go)) |
+| [docs/grafana-sms-gateway.json](docs/grafana-sms-gateway.json) | Optional Grafana dashboard for `sms_*` metrics |
+| [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, API-key hashing, rate limits, Inbox, billing controls |
 | [docs/trade-offs.md](docs/trade-offs.md) | Deliberate non-goals; why 100M/day isn’t proven on Compose and what a real proof needs |
 | [docs/load-test-report.md](docs/load-test-report.md) | k6 accept-path scenario, thresholds, execution notes, and recorded run results |
 | [AGENTS.md](AGENTS.md) | Repo orientation for contributors / AI agents (layout, non-negotiables) |
 | [LICENSE](LICENSE) | MIT |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: `go vet` + `go test -short` on push/PR |
+| [Makefile](Makefile) | `make up` / `make test` / `make smoke` / `make load-test` |
 
 ## What is implemented
 
@@ -39,11 +45,14 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 **Prerequisites:** Docker Desktop, Go 1.25+ (for local builds/tests).
 
 ```bash
-docker compose up -d --build
+make up
+# or: docker compose up -d --build
 # migrate runs automatically via the migrate service
 # api-gateway  → http://localhost:8080
 # reporting-api → http://localhost:8081
 ```
+
+Pinned infra tags: `postgres:16.6-alpine`, `redis:7.4-alpine`, `apache/kafka:3.7.0`, `clickhouse/clickhouse-server:24.8-alpine`, `migrate/migrate:v4.18.1`.
 
 ### End-to-end example (PowerShell)
 
@@ -112,17 +121,17 @@ Key reliability choices (details in [ARCHITECTURE.md](ARCHITECTURE.md)):
 
 ```bash
 # Unit tests (fast; what CI runs with -short)
-go test ./... -short -count=1
-go vet ./...
+make test
+# or: go test ./... -short -count=1 && go vet ./...
 
 # Redis Lua / Postgres Inbox integration (needs Docker; skipped under -short)
-go test ./internal/platform/redis/ ./internal/platform/inbox/ ./internal/domain/messaging/ -count=1 -timeout 3m
+make test-integration
 
 # Edge-case smoke (Compose stack must be up)
-powershell -File scripts/smoke-edge.ps1
+make smoke
 
 # Small accept-path load test (requires k6; Compose stack must be up)
-k6 run scripts/load-accept.js
+make load-test
 # See docs/load-test-report.md for scenario, thresholds, and recorded results
 ```
 

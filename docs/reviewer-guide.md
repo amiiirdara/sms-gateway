@@ -2,13 +2,20 @@
 
 Quick path for challenge reviewers. Full design: [ARCHITECTURE.md](../ARCHITECTURE.md). API contract: [openapi/openapi.yaml](../openapi/openapi.yaml).
 
+## Submission blurb (paste into the challenge form)
+
+> Multi-tenant SMS Gateway in Go (Kafka, Redis, Postgres, ClickHouse). Prepaid credit with atomic Redis Lua debit + Redis Streams outbox into Kafka; Inbox-deduped consumers for dispatch, billing, and reporting. Express lane with a 2-minute hard deadline (drop + refund). Campaigns are normal-priority, all-or-nothing. Tenant identity always from API key. Lean Docker Compose demo designed toward ~100M SMS/day (not load-proven at that scale). Docs: architecture, OpenAPI, Prometheus metrics catalog, security checklist, k6 accept-path report. Repo: https://github.com/amiiirdara/sms-gateway — start at `docs/reviewer-guide.md`.
+
 ## 1. Start the stack (~2–3 min)
 
 **Need:** Docker Desktop, optionally Go 1.25+ and [k6](https://k6.io/docs/get-started/installation/).
 
 ```bash
-docker compose up -d --build
+make up
+# or: docker compose up -d --build
 ```
+
+Infra images are pinned in `docker-compose.yml` (Postgres 16.6, Redis 7.4, Kafka 3.7.0, ClickHouse 24.8, migrate v4.18.1). Prefer a recent `master` tip for app images rebuilt from this repo.
 
 Wait until services are up. Then:
 
@@ -74,11 +81,12 @@ Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accept
 |---|---|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | Outbox/Inbox, Express SLA, data model |
 | [openapi/openapi.yaml](../openapi/openapi.yaml) | REST contract |
-| [metrics.md](metrics.md) | Prometheus business + technical metrics |
-| [security-ops-checklist.md](security-ops-checklist.md) | Tenant isolation, keys, Inbox |
+| [metrics.md](metrics.md) | Prometheus catalog ([metrics.go](../internal/platform/metrics/metrics.go)) |
+| [security-ops-checklist.md](security-ops-checklist.md) | Tenant isolation, keys, rate limits, Inbox ([auth](../internal/platform/httpx/auth/auth.go)) |
 | [trade-offs.md](trade-offs.md) | Deliberate non-goals |
 | [architecture.svg](architecture.svg) | One-page system diagram |
 | [load-test-report.md](load-test-report.md) | k6 scenario + results |
+| [grafana-sms-gateway.json](grafana-sms-gateway.json) | Optional Grafana dashboard for `sms_*` |
 
 ## Mental model (30 seconds)
 

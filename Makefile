@@ -1,50 +1,30 @@
-SHELL := /bin/sh
-DATABASE_URL ?= postgres://sms:sms@localhost:5432/sms_gateway?sslmode=disable
-SERVICES := api-gateway outbox-relay campaign-expander dispatcher report-sink billing-consumer reconciler reporting-api operator-mock
+# SMS Gateway — common local commands (GNU Make / Git Bash on Windows).
 
-.PHONY: build test lint tidy \
-	docker-up docker-down docker-logs \
-	migrate-up migrate-down sqlc \
-	$(addprefix run-,$(SERVICES))
+.PHONY: up down build test test-integration smoke load-test vet
 
-## Build every cmd/ binary into ./bin
-build:
-	@mkdir -p bin
-	@for s in $(SERVICES); do \
-		echo "building $$s"; \
-		go build -o bin/$$s ./cmd/$$s; \
-	done
-
-test:
-	go test ./...
-
-lint:
-	go vet ./...
-
-tidy:
-	go mod tidy
-
-## Bring up the full local stack (Postgres, Redis, Kafka, ClickHouse, all services)
-docker-up:
+up:
 	docker compose up -d --build
 
-docker-down:
+down:
 	docker compose down
 
-docker-logs:
-	docker compose logs -f
+build:
+	go build ./cmd/...
 
-## Apply/rollback Postgres migrations (requires golang-migrate: https://github.com/golang-migrate/migrate)
-migrate-up:
-	migrate -path db/migrations -database "$(DATABASE_URL)" up
+vet:
+	go vet ./...
 
-migrate-down:
-	migrate -path db/migrations -database "$(DATABASE_URL)" down 1
+# Fast unit tests (same as CI).
+test:
+	go test ./... -short -count=1
 
-## Regenerate sqlc code from db/queries + db/migrations (requires sqlc: https://sqlc.dev)
-sqlc:
-	sqlc generate
+# Integration tests that need Docker (testcontainers).
+test-integration:
+	go test ./internal/platform/redis/ ./internal/platform/inbox/ ./internal/domain/messaging/ -count=1 -timeout 5m
 
-## Run a single service locally against `docker-compose up` infra, e.g. `make run-api-gateway`
-run-%:
-	go run ./cmd/$*
+smoke:
+	powershell -NoProfile -File scripts/smoke-edge.ps1
+
+# Override BASE_URL if Adobe Connect owns 127.0.0.1:8080.
+load-test:
+	k6 run scripts/load-accept.js

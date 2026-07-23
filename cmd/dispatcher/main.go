@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -63,6 +64,16 @@ func main() {
 		operator.NewHTTPAdapter("irancell", env("OPERATOR_URL_IRANCELL", mockURL)),
 		operator.NewHTTPAdapter("rightel", env("OPERATOR_URL_RIGHTEL", mockURL)),
 	}, operator.DefaultIranRules())
+
+	metricsAddr := env("METRICS_ADDR", ":9090")
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", metrics.Handler())
+		log.Printf("dispatcher: metrics on %s", metricsAddr)
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+			log.Printf("dispatcher: metrics server: %v", err)
+		}
+	}()
 
 	log.Printf("dispatcher: started mode=%s topic=%s", *mode, topic)
 	for {

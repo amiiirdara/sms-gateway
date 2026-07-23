@@ -23,7 +23,8 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 - Campaigns (normal priority only, all-or-nothing balance reservation, up to 10k recipients)
 - Ledger + Inbox idempotency; reconciler safety net (auto-heal only Redis > ledger)
 - Reporting API: message status, paginated reports, campaign aggregates (ClickHouse)
-- Operator mock + pluggable adapter surface; Docker Compose local stack
+- Operator mock + pluggable multi-operator routing; Docker Compose local stack
+- Prometheus metrics at `GET /metrics` (api-gateway `:8080`; dispatcher `METRICS_ADDR`, default `:9090`)
 
 ## Quickstart
 
@@ -107,6 +108,13 @@ go test ./internal/domain/... ./internal/platform/httpx/... -count=1
 
 # Redis Lua balance integration (needs Docker)
 go test ./internal/platform/redis/ -count=1 -timeout 3m
+
+# Edge-case smoke (Compose stack must be up)
+powershell -File scripts/smoke-edge.ps1
+
+# Small accept-path load test (requires k6; Compose stack must be up)
+k6 run scripts/load-accept.js
+# RATE=50 DURATION=1m k6 run scripts/load-accept.js
 ```
 
 Verified manually against Compose: create → topup → normal send → `sent`; Express → `sent`; campaign 3/3 `sent`; balance arithmetic correct.
@@ -115,7 +123,7 @@ Verified manually against Compose: create → topup → normal send → `sent`; 
 
 | Service | Address |
 |---|---|
-| api-gateway | http://localhost:8080 |
+| api-gateway | http://localhost:8080 (`/metrics` for Prometheus) |
 | reporting-api | http://localhost:8081 |
 | Postgres | localhost:5432 (`sms`/`sms`, db `sms_gateway`) |
 | Redis | localhost:6379 |

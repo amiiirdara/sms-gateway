@@ -80,18 +80,6 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 	}
 
 	accountID := req.AccountID.String()
-	if req.IdempotencyKey != "" {
-		if cached, ok, err := s.rdb.GetIdempotentResponse(ctx, accountID, "campaign:"+req.IdempotencyKey); err != nil {
-			return AcceptResponse{}, err
-		} else if ok {
-			var resp AcceptResponse
-			if err := json.Unmarshal([]byte(cached), &resp); err != nil {
-				return AcceptResponse{}, err
-			}
-			return resp, nil
-		}
-	}
-
 	totalCost := billing.CostPerMessage * int64(len(normalized))
 	campaignID := uuid.New()
 	acceptedAt := time.Now().UTC()
@@ -100,33 +88,46 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 		return AcceptResponse{}, err
 	}
 
+	resp := AcceptResponse{
+		CampaignID:      campaignID.String(),
+		TotalRecipients: len(normalized),
+		Cost:            totalCost,
+	}
+	idemKey := ""
+	idemBody := ""
+	if req.IdempotencyKey != "" {
+		idemKey = platredis.IdempotencyKey(accountID, "campaign:"+req.IdempotencyKey)
+		b, _ := json.Marshal(resp)
+		idemBody = string(b)
+	}
+
 	result, err := s.rdb.CheckAndDebitCampaign(ctx, platredis.CampaignOutboxFields{
-		AccountID:      accountID,
-		CampaignID:     campaignID.String(),
-		Text:           req.Text,
-		TotalCost:      totalCost,
-		CostPerMessage: billing.CostPerMessage,
-		RecipientsJSON: string(recipientsJSON),
-		AcceptedAt:     acceptedAt.Format(time.RFC3339Nano),
+		AccountID:       accountID,
+		CampaignID:      campaignID.String(),
+		Text:            req.Text,
+		TotalCost:       totalCost,
+		CostPerMessage:  billing.CostPerMessage,
+		RecipientsJSON:  string(recipientsJSON),
+		AcceptedAt:      acceptedAt.Format(time.RFC3339Nano),
+		IdempotencyKey:  idemKey,
+		IdempotencyBody: idemBody,
+		IdempotencyTTL:  24 * time.Hour,
 	})
 	if err != nil {
 		return AcceptResponse{}, err
+	}
+	if result.FromCache {
+		var cached AcceptResponse
+		if err := json.Unmarshal([]byte(result.CachedBody), &cached); err != nil {
+			return AcceptResponse{}, err
+		}
+		return cached, nil
 	}
 	if !result.OK {
 		return AcceptResponse{}, &InsufficientFundsError{
 			Required:  totalCost,
 			Available: result.NewBalance,
 		}
-	}
-
-	resp := AcceptResponse{
-		CampaignID:      campaignID.String(),
-		TotalRecipients: len(normalized),
-		Cost:            totalCost,
-	}
-	if req.IdempotencyKey != "" {
-		body, _ := json.Marshal(resp)
-		_ = s.rdb.CacheIdempotentResponse(ctx, accountID, "campaign:"+req.IdempotencyKey, string(body), 24*time.Hour)
 	}
 	return resp, nil
 }
@@ -141,7 +142,6 @@ func DeterministicMessageID(campaignID uuid.UUID, index int) uuid.UUID {
 	sum := h.Sum(nil)
 	var id uuid.UUID
 	copy(id[:], sum[:16])
-	// Set version 4 / variant bits for a valid UUID shape.
 	id[6] = (id[6] & 0x0f) | 0x40
 	id[8] = (id[8] & 0x3f) | 0x80
 	return id

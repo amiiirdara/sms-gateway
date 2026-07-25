@@ -100,6 +100,51 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 		t.Fatalf("idempotent replay should not double-debit, balance=%d", bal)
 	}
 
+	// Concurrent identical Idempotency-Key must debit once (Lua serializes).
+	if err := rdb.SetBalance(ctx, accountID.String(), 1); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	ids := make(chan string, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			resp, err := svc.Accept(ctx, messaging.AcceptRequest{
+				AccountID:      accountID,
+				To:             "09121234567",
+				Text:           "race",
+				Priority:       messaging.PriorityNormal,
+				IdempotencyKey: "idem-race",
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- resp.MessageID
+		}()
+	}
+	var gotIDs []string
+	for i := 0; i < n; i++ {
+		select {
+		case err := <-errs:
+			t.Fatalf("concurrent accept: %v", err)
+		case id := <-ids:
+			gotIDs = append(gotIDs, id)
+		}
+	}
+	for _, id := range gotIDs[1:] {
+		if id != gotIDs[0] {
+			t.Fatalf("concurrent idempotency returned different message ids: %v", gotIDs)
+		}
+	}
+	bal, err = rdb.GetBalance(ctx, accountID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal != 0 {
+		t.Fatalf("concurrent idempotency double-debit, balance=%d", bal)
+	}
+
 	// Express accept sets a deadline ~2m ahead.
 	if err := rdb.SetBalance(ctx, accountID.String(), 1); err != nil {
 		t.Fatal(err)

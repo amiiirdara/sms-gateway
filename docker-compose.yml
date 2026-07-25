@@ -94,7 +94,8 @@ services:
     healthcheck:
       # Prefer clickhouse-client over wget-to-localhost: alpine resolves
       # localhost to ::1, but this image listens on IPv4 only under Docker Desktop.
-      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      # Password must match CLICKHOUSE_PASSWORD (24.8 requires auth).
+      test: ["CMD", "clickhouse-client", "--password", "sms", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30

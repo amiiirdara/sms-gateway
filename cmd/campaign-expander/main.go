@@ -27,6 +27,8 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 )
 
+const publishChunkSize = 100
+
 func main() {
 	cfg := config.Load("campaign-expander")
 	ctx, stop := lifecycle.WithShutdownSignal(context.Background())
@@ -155,23 +157,27 @@ func expandOne(ctx context.Context, pool *pgxpool.Pool, q *sqlc.Queries, normalW
 			return err
 		}
 	}
-	if err := qtx.UpdateCampaignStatus(ctx, sqlc.UpdateCampaignStatusParams{
-		ID:     campaignID,
-		Status: "expanded",
-	}); err != nil {
-		return err
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 
-	for i, recipient := range recipients {
+	camp, err := q.GetCampaignByIDOnly(ctx, campaignID)
+	if err != nil {
+		return err
+	}
+	start := int(camp.ExpandedThroughIndex) + 1
+	if start < 0 {
+		start = 0
+	}
+
+	published := 0
+	for i := start; i < len(recipients); i++ {
 		msgID := campaigns.DeterministicMessageID(campaignID, i)
 		ev := messaging.AcceptedMessage{
 			MessageID:  msgID.String(),
 			AccountID:  accountID.String(),
 			CampaignID: campaignID.String(),
-			To:         recipient,
+			To:         recipients[i],
 			Text:       text,
 			Priority:   messaging.PriorityNormal,
 			Cost:       costPerMsg,
@@ -184,9 +190,30 @@ func expandOne(ctx context.Context, pool *pgxpool.Pool, q *sqlc.Queries, normalW
 		if err := platkafka.Publish(ctx, normalW, []byte(accountID.String()), payload); err != nil {
 			return err
 		}
+		published++
+		// Persist cursor every chunk so retries resume instead of republishing all.
+		if published%publishChunkSize == 0 || i == len(recipients)-1 {
+			if err := q.UpdateCampaignExpandedThrough(ctx, sqlc.UpdateCampaignExpandedThroughParams{
+				ID:                   campaignID,
+				ExpandedThroughIndex: int32(i),
+			}); err != nil {
+				return err
+			}
+		}
 	}
-	metrics.CampaignsExpanded.Inc()
-	metrics.CampaignMessagesExpanded.Add(float64(len(recipients)))
+
+	if err := q.UpdateCampaignStatus(ctx, sqlc.UpdateCampaignStatusParams{
+		ID:     campaignID,
+		Status: "expanded",
+	}); err != nil {
+		return err
+	}
+	if start == 0 {
+		metrics.CampaignsExpanded.Inc()
+	}
+	if published > 0 {
+		metrics.CampaignMessagesExpanded.Add(float64(published))
+	}
 	return nil
 }
 

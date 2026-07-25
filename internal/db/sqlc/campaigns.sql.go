@@ -9,13 +9,14 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createCampaign = `-- name: CreateCampaign :one
 INSERT INTO campaigns (id, account_id, text, total_recipients, cost_per_message, total_cost, status)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, account_id, text, total_recipients, cost_per_message, total_cost, status, created_at, updated_at
+RETURNING id, account_id, text, total_recipients, cost_per_message, total_cost, status, expanded_through_index, created_at, updated_at
 `
 
 type CreateCampaignParams struct {
@@ -28,7 +29,20 @@ type CreateCampaignParams struct {
 	Status          string    `json:"status"`
 }
 
-func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error) {
+type CreateCampaignRow struct {
+	ID                   uuid.UUID          `json:"id"`
+	AccountID            uuid.UUID          `json:"account_id"`
+	Text                 string             `json:"text"`
+	TotalRecipients      int32              `json:"total_recipients"`
+	CostPerMessage       int64              `json:"cost_per_message"`
+	TotalCost            int64              `json:"total_cost"`
+	Status               string             `json:"status"`
+	ExpandedThroughIndex int32              `json:"expanded_through_index"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) (CreateCampaignRow, error) {
 	row := q.db.QueryRow(ctx, createCampaign,
 		arg.ID,
 		arg.AccountID,
@@ -38,7 +52,7 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 		arg.TotalCost,
 		arg.Status,
 	)
-	var i Campaign
+	var i CreateCampaignRow
 	err := row.Scan(
 		&i.ID,
 		&i.AccountID,
@@ -47,6 +61,7 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 		&i.CostPerMessage,
 		&i.TotalCost,
 		&i.Status,
+		&i.ExpandedThroughIndex,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -54,7 +69,7 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 }
 
 const getCampaignByID = `-- name: GetCampaignByID :one
-SELECT id, account_id, text, total_recipients, cost_per_message, total_cost, status, created_at, updated_at
+SELECT id, account_id, text, total_recipients, cost_per_message, total_cost, status, expanded_through_index, created_at, updated_at
 FROM campaigns
 WHERE id = $1 AND account_id = $2
 `
@@ -64,9 +79,22 @@ type GetCampaignByIDParams struct {
 	AccountID uuid.UUID `json:"account_id"`
 }
 
-func (q *Queries) GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams) (Campaign, error) {
+type GetCampaignByIDRow struct {
+	ID                   uuid.UUID          `json:"id"`
+	AccountID            uuid.UUID          `json:"account_id"`
+	Text                 string             `json:"text"`
+	TotalRecipients      int32              `json:"total_recipients"`
+	CostPerMessage       int64              `json:"cost_per_message"`
+	TotalCost            int64              `json:"total_cost"`
+	Status               string             `json:"status"`
+	ExpandedThroughIndex int32              `json:"expanded_through_index"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams) (GetCampaignByIDRow, error) {
 	row := q.db.QueryRow(ctx, getCampaignByID, arg.ID, arg.AccountID)
-	var i Campaign
+	var i GetCampaignByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.AccountID,
@@ -75,6 +103,44 @@ func (q *Queries) GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams
 		&i.CostPerMessage,
 		&i.TotalCost,
 		&i.Status,
+		&i.ExpandedThroughIndex,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCampaignByIDOnly = `-- name: GetCampaignByIDOnly :one
+SELECT id, account_id, text, total_recipients, cost_per_message, total_cost, status, expanded_through_index, created_at, updated_at
+FROM campaigns
+WHERE id = $1
+`
+
+type GetCampaignByIDOnlyRow struct {
+	ID                   uuid.UUID          `json:"id"`
+	AccountID            uuid.UUID          `json:"account_id"`
+	Text                 string             `json:"text"`
+	TotalRecipients      int32              `json:"total_recipients"`
+	CostPerMessage       int64              `json:"cost_per_message"`
+	TotalCost            int64              `json:"total_cost"`
+	Status               string             `json:"status"`
+	ExpandedThroughIndex int32              `json:"expanded_through_index"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetCampaignByIDOnly(ctx context.Context, id uuid.UUID) (GetCampaignByIDOnlyRow, error) {
+	row := q.db.QueryRow(ctx, getCampaignByIDOnly, id)
+	var i GetCampaignByIDOnlyRow
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.Text,
+		&i.TotalRecipients,
+		&i.CostPerMessage,
+		&i.TotalCost,
+		&i.Status,
+		&i.ExpandedThroughIndex,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -82,7 +148,7 @@ func (q *Queries) GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams
 }
 
 const listCampaignsByAccount = `-- name: ListCampaignsByAccount :many
-SELECT id, account_id, text, total_recipients, cost_per_message, total_cost, status, created_at, updated_at
+SELECT id, account_id, text, total_recipients, cost_per_message, total_cost, status, expanded_through_index, created_at, updated_at
 FROM campaigns
 WHERE account_id = $1
 ORDER BY created_at DESC
@@ -95,15 +161,28 @@ type ListCampaignsByAccountParams struct {
 	Offset    int32     `json:"offset"`
 }
 
-func (q *Queries) ListCampaignsByAccount(ctx context.Context, arg ListCampaignsByAccountParams) ([]Campaign, error) {
+type ListCampaignsByAccountRow struct {
+	ID                   uuid.UUID          `json:"id"`
+	AccountID            uuid.UUID          `json:"account_id"`
+	Text                 string             `json:"text"`
+	TotalRecipients      int32              `json:"total_recipients"`
+	CostPerMessage       int64              `json:"cost_per_message"`
+	TotalCost            int64              `json:"total_cost"`
+	Status               string             `json:"status"`
+	ExpandedThroughIndex int32              `json:"expanded_through_index"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListCampaignsByAccount(ctx context.Context, arg ListCampaignsByAccountParams) ([]ListCampaignsByAccountRow, error) {
 	rows, err := q.db.Query(ctx, listCampaignsByAccount, arg.AccountID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Campaign
+	var items []ListCampaignsByAccountRow
 	for rows.Next() {
-		var i Campaign
+		var i ListCampaignsByAccountRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AccountID,
@@ -112,6 +191,7 @@ func (q *Queries) ListCampaignsByAccount(ctx context.Context, arg ListCampaignsB
 			&i.CostPerMessage,
 			&i.TotalCost,
 			&i.Status,
+			&i.ExpandedThroughIndex,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -123,6 +203,22 @@ func (q *Queries) ListCampaignsByAccount(ctx context.Context, arg ListCampaignsB
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateCampaignExpandedThrough = `-- name: UpdateCampaignExpandedThrough :exec
+UPDATE campaigns
+SET expanded_through_index = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateCampaignExpandedThroughParams struct {
+	ID                   uuid.UUID `json:"id"`
+	ExpandedThroughIndex int32     `json:"expanded_through_index"`
+}
+
+func (q *Queries) UpdateCampaignExpandedThrough(ctx context.Context, arg UpdateCampaignExpandedThroughParams) error {
+	_, err := q.db.Exec(ctx, updateCampaignExpandedThrough, arg.ID, arg.ExpandedThroughIndex)
+	return err
 }
 
 const updateCampaignStatus = `-- name: UpdateCampaignStatus :exec

@@ -12,7 +12,7 @@ import (
 
 type Querier interface {
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
-	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error)
+	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (CreateCampaignRow, error)
 	// `created_at` is passed explicitly (not defaulted) so that retried Campaign
 	// Expander runs are idempotent: the composite primary key is (id, created_at),
 	// and every retry must reuse the same accepted_at timestamp for the same
@@ -21,11 +21,16 @@ type Querier interface {
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	GetAccountByAPIKeyHash(ctx context.Context, apiKeyHash string) (Account, error)
 	GetAccountByID(ctx context.Context, id uuid.UUID) (Account, error)
-	GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams) (Campaign, error)
+	GetCampaignByID(ctx context.Context, arg GetCampaignByIDParams) (GetCampaignByIDRow, error)
+	GetCampaignByIDOnly(ctx context.Context, id uuid.UUID) (GetCampaignByIDOnlyRow, error)
+	GetMessageByID(ctx context.Context, id uuid.UUID) (Message, error)
 	GetMessageByIDForAccount(ctx context.Context, arg GetMessageByIDForAccountParams) (Message, error)
 	InsertLedgerEntry(ctx context.Context, arg InsertLedgerEntryParams) (LedgerEntry, error)
 	InsertMessageStatusEvent(ctx context.Context, arg InsertMessageStatusEventParams) error
-	ListCampaignsByAccount(ctx context.Context, arg ListCampaignsByAccountParams) ([]Campaign, error)
+	IsEventProcessed(ctx context.Context, arg IsEventProcessedParams) (bool, error)
+	// Keyset pagination for reconciler sweeps (pass uuid.Nil for the first page).
+	ListAccountIDs(ctx context.Context, arg ListAccountIDsParams) ([]uuid.UUID, error)
+	ListCampaignsByAccount(ctx context.Context, arg ListCampaignsByAccountParams) ([]ListCampaignsByAccountRow, error)
 	ListLedgerEntriesByAccount(ctx context.Context, arg ListLedgerEntriesByAccountParams) ([]LedgerEntry, error)
 	ListMessagesByCampaign(ctx context.Context, arg ListMessagesByCampaignParams) ([]Message, error)
 	// Returns false (no row) if the event was already processed - caller should
@@ -35,12 +40,12 @@ type Querier interface {
 	// The ground truth for an account's balance - used by the reconciler
 	// and by cold-start Redis bootstrap (ARCHITECTURE.md section 5.3).
 	SumLedgerEntriesByAccount(ctx context.Context, accountID uuid.UUID) (int64, error)
-	// Used only by the reconciler / cold-start bootstrap to align the Postgres-cached
-	// balance with SUM(ledger_entries). The hot-path debit/credit itself happens in
-	// Redis (see ARCHITECTURE.md section 5) and is durably recorded via ledger_entries.
+	// Aligns Postgres-cached balance with SUM(ledger_entries). Hot-path debit/credit
+	// is Redis (ARCHITECTURE.md section 5); ledger_entries is durable ground truth.
 	UpdateAccountBalance(ctx context.Context, arg UpdateAccountBalanceParams) (Account, error)
+	UpdateCampaignExpandedThrough(ctx context.Context, arg UpdateCampaignExpandedThroughParams) error
 	UpdateCampaignStatus(ctx context.Context, arg UpdateCampaignStatusParams) error
-	UpdateMessageStatus(ctx context.Context, arg UpdateMessageStatusParams) error
+	UpdateMessageStatus(ctx context.Context, arg UpdateMessageStatusParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

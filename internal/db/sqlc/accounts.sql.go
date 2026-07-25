@@ -76,6 +76,39 @@ func (q *Queries) GetAccountByID(ctx context.Context, id uuid.UUID) (Account, er
 	return i, err
 }
 
+const listAccountIDs = `-- name: ListAccountIDs :many
+SELECT id FROM accounts
+WHERE id > $1
+ORDER BY id
+LIMIT $2
+`
+
+type ListAccountIDsParams struct {
+	ID    uuid.UUID `json:"id"`
+	Limit int32     `json:"limit"`
+}
+
+// Keyset pagination for reconciler sweeps (pass uuid.Nil for the first page).
+func (q *Queries) ListAccountIDs(ctx context.Context, arg ListAccountIDsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAccountIDs, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateAccountBalance = `-- name: UpdateAccountBalance :one
 UPDATE accounts
 SET balance = $2, updated_at = now()
@@ -88,9 +121,8 @@ type UpdateAccountBalanceParams struct {
 	Balance int64     `json:"balance"`
 }
 
-// Used only by the reconciler / cold-start bootstrap to align the Postgres-cached
-// balance with SUM(ledger_entries). The hot-path debit/credit itself happens in
-// Redis (see ARCHITECTURE.md section 5) and is durably recorded via ledger_entries.
+// Aligns Postgres-cached balance with SUM(ledger_entries). Hot-path debit/credit
+// is Redis (ARCHITECTURE.md section 5); ledger_entries is durable ground truth.
 func (q *Queries) UpdateAccountBalance(ctx context.Context, arg UpdateAccountBalanceParams) (Account, error) {
 	row := q.db.QueryRow(ctx, updateAccountBalance, arg.ID, arg.Balance)
 	var i Account

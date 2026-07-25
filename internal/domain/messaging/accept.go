@@ -66,18 +66,6 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 	}
 
 	accountID := req.AccountID.String()
-	if req.IdempotencyKey != "" {
-		if cached, ok, err := s.rdb.GetIdempotentResponse(ctx, accountID, req.IdempotencyKey); err != nil {
-			return AcceptResponse{}, err
-		} else if ok {
-			var resp AcceptResponse
-			if err := json.Unmarshal([]byte(cached), &resp); err != nil {
-				return AcceptResponse{}, err
-			}
-			return resp, nil
-		}
-	}
-
 	msgID := uuid.New()
 	acceptedAt := time.Now().UTC()
 	deadline := ""
@@ -85,32 +73,45 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 		deadline = acceptedAt.Add(ExpressSLA).Format(time.RFC3339Nano)
 	}
 
-	result, err := s.rdb.CheckAndDebit(ctx, platredis.MessageOutboxFields{
-		AccountID:  accountID,
-		MessageID:  msgID.String(),
-		To:         to,
-		Text:       req.Text,
-		Priority:   req.Priority,
-		Cost:       billing.CostPerMessage,
-		Deadline:   deadline,
-		CampaignID: "",
-		AcceptedAt: acceptedAt.Format(time.RFC3339Nano),
-	})
-	if err != nil {
-		return AcceptResponse{}, fmt.Errorf("check and debit: %w", err)
-	}
-	if !result.OK {
-		return AcceptResponse{}, ErrInsufficientFunds
-	}
-
 	resp := AcceptResponse{
 		MessageID: msgID.String(),
 		Status:    "accepted",
 		Cost:      billing.CostPerMessage,
 	}
+	idemKey := ""
+	idemBody := ""
 	if req.IdempotencyKey != "" {
-		body, _ := json.Marshal(resp)
-		_ = s.rdb.CacheIdempotentResponse(ctx, accountID, req.IdempotencyKey, string(body), IdempotencyTTL)
+		idemKey = platredis.IdempotencyKey(accountID, req.IdempotencyKey)
+		b, _ := json.Marshal(resp)
+		idemBody = string(b)
+	}
+
+	result, err := s.rdb.CheckAndDebit(ctx, platredis.MessageOutboxFields{
+		AccountID:       accountID,
+		MessageID:       msgID.String(),
+		To:              to,
+		Text:            req.Text,
+		Priority:        req.Priority,
+		Cost:            billing.CostPerMessage,
+		Deadline:        deadline,
+		CampaignID:      "",
+		AcceptedAt:      acceptedAt.Format(time.RFC3339Nano),
+		IdempotencyKey:  idemKey,
+		IdempotencyBody: idemBody,
+		IdempotencyTTL:  IdempotencyTTL,
+	})
+	if err != nil {
+		return AcceptResponse{}, fmt.Errorf("check and debit: %w", err)
+	}
+	if result.FromCache {
+		var cached AcceptResponse
+		if err := json.Unmarshal([]byte(result.CachedBody), &cached); err != nil {
+			return AcceptResponse{}, err
+		}
+		return cached, nil
+	}
+	if !result.OK {
+		return AcceptResponse{}, ErrInsufficientFunds
 	}
 	return resp, nil
 }

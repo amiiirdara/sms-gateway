@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const isEventProcessed = `-- name: IsEventProcessed :one
+SELECT EXISTS (
+    SELECT 1 FROM processed_events
+    WHERE consumer_name = $1 AND event_id = $2
+) AS processed
+`
+
+type IsEventProcessedParams struct {
+	ConsumerName string `json:"consumer_name"`
+	EventID      string `json:"event_id"`
+}
+
+func (q *Queries) IsEventProcessed(ctx context.Context, arg IsEventProcessedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isEventProcessed, arg.ConsumerName, arg.EventID)
+	var processed bool
+	err := row.Scan(&processed)
+	return processed, err
+}
+
 const markEventProcessed = `-- name: MarkEventProcessed :one
 INSERT INTO processed_events (consumer_name, event_id)
 VALUES ($1, $2)

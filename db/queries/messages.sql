@@ -14,14 +14,21 @@ SELECT id, account_id, campaign_id, recipient, priority, cost, status, operator,
 FROM messages
 WHERE id = $1 AND account_id = $2;
 
--- name: UpdateMessageStatus :exec
+-- name: UpdateMessageStatus :execrows
 UPDATE messages
 SET status = $3, operator = $4, dispatched_at = $5, updated_at = now()
 WHERE id = $1 AND created_at = $2;
 
 -- name: InsertMessageStatusEvent :exec
 INSERT INTO message_status_events (message_id, status, occurred_at)
-VALUES ($1, $2, $3);
+VALUES ($1, $2, $3)
+ON CONFLICT (message_id, status) DO NOTHING;
+
+-- name: GetMessageByID :one
+SELECT id, account_id, campaign_id, recipient, priority, cost, status, operator, deadline_at, dispatched_at, created_at, updated_at
+FROM messages
+WHERE id = $1
+LIMIT 1;
 
 -- name: ListMessagesByCampaign :many
 SELECT id, account_id, campaign_id, recipient, priority, cost, status, operator, deadline_at, dispatched_at, created_at, updated_at

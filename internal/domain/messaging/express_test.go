@@ -21,8 +21,8 @@ func TestExpressExpired(t *testing.T) {
 	if messaging.ExpressExpired("", now) {
 		t.Fatal("empty deadline should not expire")
 	}
-	if messaging.ExpressExpired("not-a-time", now) {
-		t.Fatal("invalid deadline should not expire")
+	if !messaging.ExpressExpired("not-a-time", now) {
+		t.Fatal("invalid deadline should fail closed (expire)")
 	}
 }
 

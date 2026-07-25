@@ -19,15 +19,16 @@ type Account struct {
 }
 
 type Campaign struct {
-	ID              uuid.UUID          `json:"id"`
-	AccountID       uuid.UUID          `json:"account_id"`
-	Text            string             `json:"text"`
-	TotalRecipients int32              `json:"total_recipients"`
-	CostPerMessage  int64              `json:"cost_per_message"`
-	TotalCost       int64              `json:"total_cost"`
-	Status          string             `json:"status"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                   uuid.UUID          `json:"id"`
+	AccountID            uuid.UUID          `json:"account_id"`
+	Text                 string             `json:"text"`
+	TotalRecipients      int32              `json:"total_recipients"`
+	CostPerMessage       int64              `json:"cost_per_message"`
+	TotalCost            int64              `json:"total_cost"`
+	Status               string             `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	ExpandedThroughIndex int32              `json:"expanded_through_index"`
 }
 
 type LedgerEntry struct {

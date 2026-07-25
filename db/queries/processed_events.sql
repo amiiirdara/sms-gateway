@@ -6,3 +6,9 @@ INSERT INTO processed_events (consumer_name, event_id)
 VALUES ($1, $2)
 ON CONFLICT (consumer_name, event_id) DO NOTHING
 RETURNING consumer_name, event_id, processed_at;
+
+-- name: IsEventProcessed :one
+SELECT EXISTS (
+    SELECT 1 FROM processed_events
+    WHERE consumer_name = $1 AND event_id = $2
+) AS processed;

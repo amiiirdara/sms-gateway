@@ -10,6 +10,8 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -98,7 +100,6 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64) 
 
 	newBal, err := s.rdb.IncrBalance(ctx, accountID.String(), amount)
 	if err != nil {
-		// Best-effort repair: set Redis from ledger sum.
 		_ = s.rdb.SetBalance(ctx, accountID.String(), sum)
 		return sum, nil
 	}
@@ -111,6 +112,7 @@ func (s *Service) Balance(ctx context.Context, accountID uuid.UUID) (int64, erro
 }
 
 // RecordDebit writes a durable ledger debit and updates the cached Postgres balance.
+// Unique (message_id) WHERE type=debit makes this safe under retries.
 func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	mid := messageID
 	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
@@ -119,6 +121,9 @@ func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, m
 		Amount:    -amount,
 		MessageID: &mid,
 	})
+	if isUniqueViolation(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -130,8 +135,9 @@ func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, m
 	return err
 }
 
-// RecordRefund writes a refund ledger entry, updates Postgres cache, and credits Redis.
-func (s *Service) RecordRefund(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
+// RecordRefundLedger writes a refund ledger entry and updates the Postgres cache.
+// Redis must be credited AFTER the surrounding Inbox transaction commits.
+func (s *Service) RecordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	mid := messageID
 	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
 		AccountID: accountID,
@@ -139,6 +145,9 @@ func (s *Service) RecordRefund(ctx context.Context, q *sqlc.Queries, accountID, 
 		Amount:    amount,
 		MessageID: &mid,
 	})
+	if isUniqueViolation(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -146,11 +155,20 @@ func (s *Service) RecordRefund(ctx context.Context, q *sqlc.Queries, accountID, 
 	if err != nil {
 		return err
 	}
-	if _, err := q.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{ID: accountID, Balance: sum}); err != nil {
-		return err
-	}
-	_, err = s.rdb.IncrBalance(ctx, accountID.String(), amount)
+	_, err = q.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{ID: accountID, Balance: sum})
 	return err
+}
+
+// CreditRedisAfterRefund increments Redis after a committed ledger refund.
+// On failure, aligns Redis to the ledger sum (safe repair).
+func (s *Service) CreditRedisAfterRefund(ctx context.Context, accountID uuid.UUID, amount int64) error {
+	if _, err := s.rdb.IncrBalance(ctx, accountID.String(), amount); err != nil {
+		_, alignErr := s.AlignRedisToLedger(ctx, accountID)
+		if alignErr != nil {
+			return fmt.Errorf("redis credit: %w (align: %v)", err, alignErr)
+		}
+	}
+	return nil
 }
 
 // LedgerSum returns SUM(ledger_entries) for reconciler.
@@ -158,22 +176,9 @@ func (s *Service) LedgerSum(ctx context.Context, accountID uuid.UUID) (int64, er
 	return s.q.SumLedgerEntriesByAccount(ctx, accountID)
 }
 
-// ListAccountIDs returns all account IDs (for reconciler sweep).
-func (s *Service) ListAccountIDs(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id FROM accounts`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+// ListAccountIDsPage returns account IDs after afterID (keyset), up to limit.
+func (s *Service) ListAccountIDsPage(ctx context.Context, afterID uuid.UUID, limit int32) ([]uuid.UUID, error) {
+	return s.q.ListAccountIDs(ctx, sqlc.ListAccountIDsParams{ID: afterID, Limit: limit})
 }
 
 // AlignRedisToLedger sets Redis balance from the ledger sum (cold start / safe heal).
@@ -187,3 +192,14 @@ func (s *Service) AlignRedisToLedger(ctx context.Context, accountID uuid.UUID) (
 	}
 	return sum, nil
 }
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
+}
+
+// ErrNoRows re-export for callers that still check pgx.ErrNoRows via billing.
+var ErrNoRows = pgx.ErrNoRows

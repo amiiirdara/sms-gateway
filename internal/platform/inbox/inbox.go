@@ -26,6 +26,10 @@ func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, q: sqlc.New(pool)}
 }
 
+// Pool exposes the underlying pool for short business transactions that are
+// not Inbox-guarded (e.g. report-sink PG writes before Mark).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // TryBegin marks an event as processed inside an open transaction.
 // If the event was already processed, returns ErrAlreadyProcessed.
 // The caller must commit/rollback the returned transaction.
@@ -50,7 +54,27 @@ func (s *Store) TryBegin(ctx context.Context, consumerName, eventID string) (pgx
 	return tx, qtx, nil
 }
 
-// AlreadyProcessed reports whether MarkEventProcessed returned no row
+// IsProcessed reports whether (consumerName, eventID) is already in the Inbox.
+func (s *Store) IsProcessed(ctx context.Context, consumerName, eventID string) (bool, error) {
+	return s.q.IsEventProcessed(ctx, sqlc.IsEventProcessedParams{
+		ConsumerName: consumerName,
+		EventID:      eventID,
+	})
+}
+
+// Mark marks an event processed in its own short transaction (after side effects).
+func (s *Store) Mark(ctx context.Context, consumerName, eventID string) error {
+	tx, _, err := s.TryBegin(ctx, consumerName, eventID)
+	if IsAlreadyProcessed(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// IsAlreadyProcessed reports whether MarkEventProcessed returned no row
 // (ON CONFLICT DO NOTHING) without starting a transaction. Prefer TryBegin
 // for the real consumer path.
 func IsAlreadyProcessed(err error) bool {

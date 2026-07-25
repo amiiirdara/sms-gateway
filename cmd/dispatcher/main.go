@@ -53,8 +53,9 @@ func main() {
 	defer reader.Close()
 	resultsW := platkafka.NewWriter(cfg.KafkaBrokers, platkafka.TopicDispatchResults)
 	defer resultsW.Close()
+	dlqW := platkafka.NewWriter(cfg.KafkaBrokers, platkafka.TopicDLQ)
+	defer dlqW.Close()
 
-	// Local demo: all named MNOs point at the same operator-mock; swap URLs in prod.
 	mockURL := env("OPERATOR_URL", "http://operator-mock:8080")
 	fallback := operator.NewHTTPAdapter("default", mockURL)
 	router := operator.NewRouter(fallback, []operator.Adapter{
@@ -65,29 +66,28 @@ func main() {
 	}, operator.DefaultIranRules())
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
-
+	consumer := "dispatcher-" + *mode
 	log.Printf("dispatcher: started mode=%s topic=%s", *mode, topic)
-	for {
-		msg, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				log.Println("dispatcher: shutting down")
-				return
+
+	platkafka.ConsumeLoop(ctx, reader, dlqW, consumer, platkafka.DefaultMaxAttempts,
+		func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
+			err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router)
+			if err == nil {
+				return platkafka.OutcomeOK, nil
 			}
-			log.Printf("dispatcher: fetch: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router); err != nil {
-			metrics.ConsumerHandleErrors.WithLabelValues("dispatcher-"+*mode).Inc()
-			log.Printf("dispatcher: handle: %v", err)
-			continue
-		}
-		if err := reader.CommitMessages(ctx, msg); err != nil {
-			log.Printf("dispatcher: commit: %v", err)
-		}
-	}
+			var pe *json.SyntaxError
+			if errors.As(err, &pe) || errors.Is(err, errPoison) {
+				return platkafka.OutcomePoison, err
+			}
+			metrics.ConsumerHandleErrors.WithLabelValues(consumer).Inc()
+			return platkafka.OutcomeRetry, err
+		},
+		func(err error) { log.Printf("dispatcher: %v", err) },
+	)
+	log.Println("dispatcher: shutting down")
 }
+
+var errPoison = errors.New("poison message")
 
 func handle(
 	ctx context.Context,
@@ -100,25 +100,29 @@ func handle(
 ) error {
 	var ev messaging.AcceptedMessage
 	if err := json.Unmarshal(msg.Value, &ev); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errPoison, err)
 	}
-	eventID := ev.MessageID + ":dispatch"
+	if ev.MessageID == "" || ev.AccountID == "" {
+		return fmt.Errorf("%w: missing messageId/accountId", errPoison)
+	}
 
 	consumer := "dispatcher-" + mode
-	tx, qtx, err := inboxStore.TryBegin(ctx, consumer, eventID)
-	if inbox.IsAlreadyProcessed(err) {
-		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
-		return nil
-	}
+	eventID := ev.MessageID + ":dispatch"
+
+	// Already finished: republish dispatch-results (fixes commit-then-publish crash).
+	done, err := inboxStore.IsProcessed(ctx, consumer, eventID)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	if done {
+		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
+		return republishFromDB(ctx, q, resultsW, ev)
+	}
 
+	// Operator call OUTSIDE any Postgres transaction.
 	now := time.Now().UTC()
 	status := "sent"
 	operatorName := ""
-
 	if mode == "express" && messaging.ExpressExpired(ev.Deadline, now) {
 		status = "expired_sla_missed"
 		metrics.ExpressSLAMissed.Inc()
@@ -137,18 +141,17 @@ func handle(
 
 	messageID, err := uuid.Parse(ev.MessageID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: message id: %v", errPoison, err)
 	}
 	accountID, err := uuid.Parse(ev.AccountID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: account id: %v", errPoison, err)
 	}
 
 	createdAt := pgtype.Timestamptz{Time: ev.AcceptedAt, Valid: true}
 	var campaignID *uuid.UUID
 	if ev.CampaignID != "" {
-		cid, err := uuid.Parse(ev.CampaignID)
-		if err == nil {
+		if cid, err := uuid.Parse(ev.CampaignID); err == nil {
 			campaignID = &cid
 		}
 	}
@@ -158,6 +161,16 @@ func handle(
 			deadlineAt = pgtype.Timestamptz{Time: d, Valid: true}
 		}
 	}
+
+	tx, qtx, err := inboxStore.TryBegin(ctx, consumer, eventID)
+	if inbox.IsAlreadyProcessed(err) {
+		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
+		return republishFromDB(ctx, q, resultsW, ev)
+	}
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 
 	_, err = qtx.CreateMessage(ctx, sqlc.CreateMessageParams{
 		ID:         messageID,
@@ -176,14 +189,18 @@ func handle(
 
 	opText := pgtype.Text{String: operatorName, Valid: operatorName != ""}
 	dispatchedAt := pgtype.Timestamptz{Time: now, Valid: true}
-	if err := qtx.UpdateMessageStatus(ctx, sqlc.UpdateMessageStatusParams{
+	n, err := qtx.UpdateMessageStatus(ctx, sqlc.UpdateMessageStatusParams{
 		ID:           messageID,
 		CreatedAt:    createdAt,
 		Status:       status,
 		Operator:     opText,
 		DispatchedAt: dispatchedAt,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("update status: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update status: no row for message %s created_at=%s", messageID, ev.AcceptedAt)
 	}
 	if err := qtx.InsertMessageStatusEvent(ctx, sqlc.InsertMessageStatusEventParams{
 		MessageID:  messageID,
@@ -216,11 +233,53 @@ func handle(
 		DispatchedAt: now,
 		CreatedAt:    ev.AcceptedAt,
 	}
+	return publishResult(ctx, resultsW, result)
+}
+
+func republishFromDB(ctx context.Context, q *sqlc.Queries, resultsW *kafkago.Writer, ev messaging.AcceptedMessage) error {
+	messageID, err := uuid.Parse(ev.MessageID)
+	if err != nil {
+		return err
+	}
+	row, err := q.GetMessageByID(ctx, messageID)
+	if err != nil {
+		return fmt.Errorf("republish load message: %w", err)
+	}
+	var campaignID string
+	if row.CampaignID != nil {
+		campaignID = row.CampaignID.String()
+	}
+	dispatchedAt := time.Now().UTC()
+	if row.DispatchedAt.Valid {
+		dispatchedAt = row.DispatchedAt.Time
+	}
+	op := ""
+	if row.Operator.Valid {
+		op = row.Operator.String
+	}
+	result := messaging.DispatchResult{
+		MessageID:    ev.MessageID,
+		AccountID:    ev.AccountID,
+		CampaignID:   campaignID,
+		To:           row.Recipient,
+		Text:         ev.Text,
+		Priority:     row.Priority,
+		Cost:         row.Cost,
+		Status:       row.Status,
+		Operator:     op,
+		AcceptedAt:   ev.AcceptedAt,
+		DispatchedAt: dispatchedAt,
+		CreatedAt:    row.CreatedAt.Time,
+	}
+	return publishResult(ctx, resultsW, result)
+}
+
+func publishResult(ctx context.Context, resultsW *kafkago.Writer, result messaging.DispatchResult) error {
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	return platkafka.Publish(ctx, resultsW, []byte(ev.AccountID), payload)
+	return platkafka.Publish(ctx, resultsW, []byte(result.AccountID), payload)
 }
 
 func env(k, def string) string {

@@ -14,6 +14,8 @@ import (
 const (
 	OutboxMessagesStream  = "outbox:messages"
 	OutboxCampaignsStream = "outbox:campaigns"
+	// Approximate stream trim after ACK'd traffic; keeps Redis memory bounded.
+	outboxMaxLenApprox = 100000
 )
 
 // Client wraps go-redis with domain helpers.
@@ -76,11 +78,16 @@ func (c *Client) IncrBalance(ctx context.Context, accountID string, delta int64)
 }
 
 // Lua: atomic check-and-decrement + outbox append for a single message.
-// KEYS[1] = balance key
-// KEYS[2] = outbox stream
-// ARGV[1] = cost
-// ARGV[2..] = field/value pairs for the stream entry
+// Optional idempotency: if ARGV[11] (idem key) is set and already has a value,
+// return {2, 0, cachedBody} without debiting again.
 var checkAndDebitScript = goredis.NewScript(`
+local idemKey = ARGV[11]
+if idemKey ~= nil and idemKey ~= '' then
+  local existing = redis.call('GET', idemKey)
+  if existing then
+    return {2, 0, existing}
+  end
+end
 local bal = tonumber(redis.call('GET', KEYS[1]) or '0')
 local cost = tonumber(ARGV[1])
 if bal < cost then
@@ -88,7 +95,7 @@ if bal < cost then
 end
 local newBal = bal - cost
 redis.call('SET', KEYS[1], newBal)
-local id = redis.call('XADD', KEYS[2], '*',
+local id = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[14], '*',
   'account_id', ARGV[2],
   'message_id', ARGV[3],
   'to', ARGV[4],
@@ -99,20 +106,26 @@ local id = redis.call('XADD', KEYS[2], '*',
   'campaign_id', ARGV[9],
   'accepted_at', ARGV[10]
 )
+if idemKey ~= nil and idemKey ~= '' then
+  redis.call('SET', idemKey, ARGV[12], 'EX', tonumber(ARGV[13]))
+end
 return {1, newBal, id}
 `)
 
 // MessageOutboxFields carries the payload written to outbox:messages.
 type MessageOutboxFields struct {
-	AccountID  string
-	MessageID  string
-	To         string
-	Text       string
-	Priority   string
-	Cost       int64
-	Deadline   string // RFC3339 or empty for normal
-	CampaignID string // empty if not part of a campaign
-	AcceptedAt string // RFC3339
+	AccountID      string
+	MessageID      string
+	To             string
+	Text           string
+	Priority       string
+	Cost           int64
+	Deadline       string // RFC3339 or empty for normal
+	CampaignID     string // empty if not part of a campaign
+	AcceptedAt     string // RFC3339
+	IdempotencyKey string // full Redis key, or empty
+	IdempotencyBody string
+	IdempotencyTTL time.Duration
 }
 
 // CheckAndDebitResult is the outcome of the atomic Lua debit.
@@ -120,10 +133,17 @@ type CheckAndDebitResult struct {
 	OK         bool
 	NewBalance int64
 	StreamID   string
+	// CachedBody is set when an idempotency key already had a successful response.
+	CachedBody string
+	FromCache  bool
 }
 
 // CheckAndDebit atomically decrements balance and appends an outbox entry.
 func (c *Client) CheckAndDebit(ctx context.Context, fields MessageOutboxFields) (CheckAndDebitResult, error) {
+	ttlSec := int64(fields.IdempotencyTTL / time.Second)
+	if ttlSec <= 0 && fields.IdempotencyKey != "" {
+		ttlSec = int64(24 * time.Hour / time.Second)
+	}
 	res, err := checkAndDebitScript.Run(ctx, c.rdb, []string{
 		BalanceKey(fields.AccountID),
 		OutboxMessagesStream,
@@ -138,11 +158,19 @@ func (c *Client) CheckAndDebit(ctx context.Context, fields MessageOutboxFields) 
 		fields.Deadline,
 		fields.CampaignID,
 		fields.AcceptedAt,
+		fields.IdempotencyKey,
+		fields.IdempotencyBody,
+		ttlSec,
+		outboxMaxLenApprox,
 	).Slice()
 	if err != nil {
 		return CheckAndDebitResult{}, fmt.Errorf("redis: CheckAndDebit: %w", err)
 	}
 	okFlag, _ := toInt64(res[0])
+	if okFlag == 2 {
+		body, _ := res[2].(string)
+		return CheckAndDebitResult{OK: true, FromCache: true, CachedBody: body}, nil
+	}
 	newBal, _ := toInt64(res[1])
 	if okFlag < 0 {
 		return CheckAndDebitResult{OK: false, NewBalance: newBal}, nil
@@ -153,6 +181,13 @@ func (c *Client) CheckAndDebit(ctx context.Context, fields MessageOutboxFields) 
 
 // Lua: atomic check-and-decrement for a whole campaign + outbox append.
 var checkAndDebitCampaignScript = goredis.NewScript(`
+local idemKey = ARGV[9]
+if idemKey ~= nil and idemKey ~= '' then
+  local existing = redis.call('GET', idemKey)
+  if existing then
+    return {2, 0, existing}
+  end
+end
 local bal = tonumber(redis.call('GET', KEYS[1]) or '0')
 local cost = tonumber(ARGV[1])
 if bal < cost then
@@ -160,7 +195,7 @@ if bal < cost then
 end
 local newBal = bal - cost
 redis.call('SET', KEYS[1], newBal)
-local id = redis.call('XADD', KEYS[2], '*',
+local id = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[12], '*',
   'account_id', ARGV[2],
   'campaign_id', ARGV[3],
   'text', ARGV[4],
@@ -169,22 +204,32 @@ local id = redis.call('XADD', KEYS[2], '*',
   'recipients', ARGV[7],
   'accepted_at', ARGV[8]
 )
+if idemKey ~= nil and idemKey ~= '' then
+  redis.call('SET', idemKey, ARGV[10], 'EX', tonumber(ARGV[11]))
+end
 return {1, newBal, id}
 `)
 
 // CampaignOutboxFields carries the payload written to outbox:campaigns.
 type CampaignOutboxFields struct {
-	AccountID      string
-	CampaignID     string
-	Text           string
-	TotalCost      int64
-	CostPerMessage int64
-	RecipientsJSON string
-	AcceptedAt     string
+	AccountID       string
+	CampaignID      string
+	Text            string
+	TotalCost       int64
+	CostPerMessage  int64
+	RecipientsJSON  string
+	AcceptedAt      string
+	IdempotencyKey  string
+	IdempotencyBody string
+	IdempotencyTTL  time.Duration
 }
 
 // CheckAndDebitCampaign atomically reserves campaign cost and appends outbox.
 func (c *Client) CheckAndDebitCampaign(ctx context.Context, fields CampaignOutboxFields) (CheckAndDebitResult, error) {
+	ttlSec := int64(fields.IdempotencyTTL / time.Second)
+	if ttlSec <= 0 && fields.IdempotencyKey != "" {
+		ttlSec = int64(24 * time.Hour / time.Second)
+	}
 	res, err := checkAndDebitCampaignScript.Run(ctx, c.rdb, []string{
 		BalanceKey(fields.AccountID),
 		OutboxCampaignsStream,
@@ -197,11 +242,19 @@ func (c *Client) CheckAndDebitCampaign(ctx context.Context, fields CampaignOutbo
 		strconv.FormatInt(fields.CostPerMessage, 10),
 		fields.RecipientsJSON,
 		fields.AcceptedAt,
+		fields.IdempotencyKey,
+		fields.IdempotencyBody,
+		ttlSec,
+		outboxMaxLenApprox,
 	).Slice()
 	if err != nil {
 		return CheckAndDebitResult{}, fmt.Errorf("redis: CheckAndDebitCampaign: %w", err)
 	}
 	okFlag, _ := toInt64(res[0])
+	if okFlag == 2 {
+		body, _ := res[2].(string)
+		return CheckAndDebitResult{OK: true, FromCache: true, CachedBody: body}, nil
+	}
 	newBal, _ := toInt64(res[1])
 	if okFlag < 0 {
 		return CheckAndDebitResult{OK: false, NewBalance: newBal}, nil

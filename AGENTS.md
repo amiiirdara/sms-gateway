@@ -16,8 +16,8 @@ internal/
   config/            Env/config loading (incl. CLICKHOUSE_PASSWORD)
   platform/          Thin wrappers: postgres, redis, kafka, clickhouse, inbox,
                      httpx (auth/ratelimit), lifecycle, metrics
-  domain/            Business logic by bounded context: billing, messaging, campaigns
-                     (reporting HTTP handlers live in cmd/reporting-api; no domain/reporting yet)
+  domain/            Business logic by bounded context: billing, messaging, campaigns, reporting
+                     (HTTP wiring for reports stays in cmd/reporting-api)
   db/sqlc/           Generated code from sqlc - do not hand-edit
 db/
   migrations/        golang-migrate SQL migrations (source of truth for Postgres schema)

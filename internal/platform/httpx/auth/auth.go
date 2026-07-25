@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/amiri/sms-gateway/internal/db/sqlc"
 	"github.com/google/uuid"
@@ -30,8 +32,14 @@ type Account struct {
 var ErrUnauthorized = errors.New("unauthorized")
 
 // HashAPIKey returns the hex-encoded SHA-256 of an API key.
+// High-entropy 256-bit keys make unsalted SHA-256 appropriate; optional
+// AUTH_KEY_PEPPER env adds defense-in-depth for shared environments.
 func HashAPIKey(apiKey string) string {
-	sum := sha256.Sum256([]byte(apiKey))
+	payload := apiKey
+	if p := os.Getenv("AUTH_KEY_PEPPER"); p != "" {
+		payload = p + ":" + apiKey
+	}
+	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -46,6 +54,14 @@ func GenerateAPIKey() (string, error) {
 
 // Middleware authenticates Bearer API keys and injects Account into context.
 func Middleware(q *sqlc.Queries) func(http.Handler) http.Handler {
+	return MiddlewareWithCache(q, NewAccountCache(30*time.Second))
+}
+
+// MiddlewareWithCache is like Middleware but uses the provided account cache.
+func MiddlewareWithCache(q *sqlc.Queries, cache *AccountCache) func(http.Handler) http.Handler {
+	if cache == nil {
+		cache = NewAccountCache(30 * time.Second)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := r.Header.Get("Authorization")
@@ -63,7 +79,13 @@ func Middleware(q *sqlc.Queries) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"empty API key"}`, http.StatusUnauthorized)
 				return
 			}
-			acc, err := q.GetAccountByAPIKeyHash(r.Context(), HashAPIKey(apiKey))
+			keyHash := HashAPIKey(apiKey)
+			if acc, ok := cache.Get(keyHash); ok {
+				ctx := context.WithValue(r.Context(), accountKey, acc)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			row, err := q.GetAccountByAPIKeyHash(r.Context(), keyHash)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
@@ -72,7 +94,9 @@ func Middleware(q *sqlc.Queries) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
-			ctx := context.WithValue(r.Context(), accountKey, Account{ID: acc.ID, Name: acc.Name})
+			acc := Account{ID: row.ID, Name: row.Name}
+			cache.Set(keyHash, acc)
+			ctx := context.WithValue(r.Context(), accountKey, acc)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

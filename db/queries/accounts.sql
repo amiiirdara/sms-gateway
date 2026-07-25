@@ -14,10 +14,16 @@ FROM accounts
 WHERE id = $1;
 
 -- name: UpdateAccountBalance :one
--- Used only by the reconciler / cold-start bootstrap to align the Postgres-cached
--- balance with SUM(ledger_entries). The hot-path debit/credit itself happens in
--- Redis (see ARCHITECTURE.md section 5) and is durably recorded via ledger_entries.
+-- Aligns Postgres-cached balance with SUM(ledger_entries). Hot-path debit/credit
+-- is Redis (ARCHITECTURE.md section 5); ledger_entries is durable ground truth.
 UPDATE accounts
 SET balance = $2, updated_at = now()
 WHERE id = $1
 RETURNING id, api_key_hash, name, balance, created_at, updated_at;
+
+-- name: ListAccountIDs :many
+-- Keyset pagination for reconciler sweeps (pass uuid.Nil for the first page).
+SELECT id FROM accounts
+WHERE id > $1
+ORDER BY id
+LIMIT $2;

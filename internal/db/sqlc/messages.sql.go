@@ -66,6 +66,33 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 	return i, err
 }
 
+const getMessageByID = `-- name: GetMessageByID :one
+SELECT id, account_id, campaign_id, recipient, priority, cost, status, operator, deadline_at, dispatched_at, created_at, updated_at
+FROM messages
+WHERE id = $1
+LIMIT 1
+`
+
+func (q *Queries) GetMessageByID(ctx context.Context, id uuid.UUID) (Message, error) {
+	row := q.db.QueryRow(ctx, getMessageByID, id)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CampaignID,
+		&i.Recipient,
+		&i.Priority,
+		&i.Cost,
+		&i.Status,
+		&i.Operator,
+		&i.DeadlineAt,
+		&i.DispatchedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getMessageByIDForAccount = `-- name: GetMessageByIDForAccount :one
 SELECT id, account_id, campaign_id, recipient, priority, cost, status, operator, deadline_at, dispatched_at, created_at, updated_at
 FROM messages
@@ -100,6 +127,7 @@ func (q *Queries) GetMessageByIDForAccount(ctx context.Context, arg GetMessageBy
 const insertMessageStatusEvent = `-- name: InsertMessageStatusEvent :exec
 INSERT INTO message_status_events (message_id, status, occurred_at)
 VALUES ($1, $2, $3)
+ON CONFLICT (message_id, status) DO NOTHING
 `
 
 type InsertMessageStatusEventParams struct {
@@ -166,7 +194,7 @@ func (q *Queries) ListMessagesByCampaign(ctx context.Context, arg ListMessagesBy
 	return items, nil
 }
 
-const updateMessageStatus = `-- name: UpdateMessageStatus :exec
+const updateMessageStatus = `-- name: UpdateMessageStatus :execrows
 UPDATE messages
 SET status = $3, operator = $4, dispatched_at = $5, updated_at = now()
 WHERE id = $1 AND created_at = $2
@@ -180,13 +208,16 @@ type UpdateMessageStatusParams struct {
 	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
 }
 
-func (q *Queries) UpdateMessageStatus(ctx context.Context, arg UpdateMessageStatusParams) error {
-	_, err := q.db.Exec(ctx, updateMessageStatus,
+func (q *Queries) UpdateMessageStatus(ctx context.Context, arg UpdateMessageStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateMessageStatus,
 		arg.ID,
 		arg.CreatedAt,
 		arg.Status,
 		arg.Operator,
 		arg.DispatchedAt,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

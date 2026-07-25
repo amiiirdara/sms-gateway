@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -40,55 +42,56 @@ func main() {
 	defer ch.Close()
 
 	inboxStore := inbox.New(pool)
+	q := sqlc.New(pool)
 	reader := platkafka.NewReader(cfg.KafkaBrokers, platkafka.TopicDispatchResults, "report-sink")
 	defer reader.Close()
+	dlqW := platkafka.NewWriter(cfg.KafkaBrokers, platkafka.TopicDLQ)
+	defer dlqW.Close()
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
 	log.Println("report-sink: started")
-	for {
-		msg, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				log.Println("report-sink: shutting down")
-				return
+	platkafka.ConsumeLoop(ctx, reader, dlqW, "report-sink", platkafka.DefaultMaxAttempts,
+		func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
+			err := handle(ctx, msg, inboxStore, q, ch)
+			if err == nil {
+				return platkafka.OutcomeOK, nil
 			}
-			log.Printf("report-sink: fetch: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if err := handle(ctx, msg, inboxStore, ch); err != nil {
+			var pe *json.SyntaxError
+			if errors.As(err, &pe) {
+				return platkafka.OutcomePoison, err
+			}
 			metrics.ConsumerHandleErrors.WithLabelValues("report-sink").Inc()
-			log.Printf("report-sink: handle: %v", err)
-			continue
-		}
-		_ = reader.CommitMessages(ctx, msg)
-	}
+			return platkafka.OutcomeRetry, err
+		},
+		func(err error) { log.Printf("report-sink: %v", err) },
+	)
+	log.Println("report-sink: shutting down")
 }
 
-func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, ch *platch.Client) error {
+func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, q *sqlc.Queries, ch *platch.Client) error {
 	var ev messaging.DispatchResult
 	if err := json.Unmarshal(msg.Value, &ev); err != nil {
 		return err
 	}
 
-	tx, qtx, err := inboxStore.TryBegin(ctx, "report-sink", ev.MessageID+":report")
-	if inbox.IsAlreadyProcessed(err) {
+	eventID := ev.MessageID + ":report"
+	done, err := inboxStore.IsProcessed(ctx, "report-sink", eventID)
+	if err != nil {
+		return err
+	}
+	if done {
 		metrics.InboxDuplicates.WithLabelValues("report-sink").Inc()
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 
 	messageID, err := uuid.Parse(ev.MessageID)
 	if err != nil {
-		return err
+		return fmt.Errorf("message id: %w", err)
 	}
 	accountID, err := uuid.Parse(ev.AccountID)
 	if err != nil {
-		return err
+		return fmt.Errorf("account id: %w", err)
 	}
 
 	createdAt := pgtype.Timestamptz{Time: ev.CreatedAt, Valid: !ev.CreatedAt.IsZero()}
@@ -98,27 +101,47 @@ func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, c
 	op := pgtype.Text{String: ev.Operator, Valid: ev.Operator != ""}
 	dispatchedAt := pgtype.Timestamptz{Time: ev.DispatchedAt, Valid: !ev.DispatchedAt.IsZero()}
 
-	_ = qtx.UpdateMessageStatus(ctx, sqlc.UpdateMessageStatusParams{
+	// 1) Postgres writes (retry-safe) without Inbox mark yet.
+	tx, err := inboxStore.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := q.WithTx(tx)
+
+	n, err := qtx.UpdateMessageStatus(ctx, sqlc.UpdateMessageStatusParams{
 		ID:           messageID,
 		CreatedAt:    createdAt,
 		Status:       ev.Status,
 		Operator:     op,
 		DispatchedAt: dispatchedAt,
 	})
-	_ = qtx.InsertMessageStatusEvent(ctx, sqlc.InsertMessageStatusEventParams{
+	if err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
+	if n == 0 {
+		// Message row may not exist yet if dispatcher raced; retry.
+		return fmt.Errorf("update status: no row for %s", messageID)
+	}
+	if err := qtx.InsertMessageStatusEvent(ctx, sqlc.InsertMessageStatusEventParams{
 		MessageID:  messageID,
 		Status:     ev.Status,
 		OccurredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	})
+	}); err != nil {
+		return fmt.Errorf("status event: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	var campaignID *uuid.UUID
 	if ev.CampaignID != "" {
-		cid, err := uuid.Parse(ev.CampaignID)
-		if err == nil {
+		if cid, err := uuid.Parse(ev.CampaignID); err == nil {
 			campaignID = &cid
 		}
 	}
-	if err := ch.InsertMessageEvent(ctx, platch.MessageEvent{
+	// 2) ClickHouse (idempotent ensure).
+	if err := ch.EnsureMessageEvent(ctx, platch.MessageEvent{
 		EventTime:  ev.DispatchedAt,
 		MessageID:  messageID,
 		AccountID:  accountID,
@@ -131,7 +154,9 @@ func handle(ctx context.Context, msg kafkago.Message, inboxStore *inbox.Store, c
 	}); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
+
+	// 3) Mark Inbox only after PG + CH succeeded.
+	if err := inboxStore.Mark(ctx, "report-sink", eventID); err != nil {
 		return err
 	}
 	metrics.InboxProcessed.WithLabelValues("report-sink").Inc()

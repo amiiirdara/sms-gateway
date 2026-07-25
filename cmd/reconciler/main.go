@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
@@ -13,6 +14,14 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
+	"github.com/google/uuid"
+)
+
+// Ignore tiny / fresh lag so async ledger writes do not flap alerts.
+const (
+	defaultDriftThreshold = int64(0) // any non-zero redis>ledger still heals
+	pageSize              = int32(200)
+	minLagBeforeWarn      = 0 // keep warn on redis<ledger; heal only redis>ledger
 )
 
 func main() {
@@ -34,55 +43,71 @@ func main() {
 	billingSvc := billing.New(pool, rdb)
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
+	threshold := defaultDriftThreshold
+	if v := os.Getenv("RECONCILER_DRIFT_THRESHOLD"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			threshold = n
+		}
+	}
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	log.Println("reconciler: started")
-	runOnce(ctx, billingSvc, rdb)
+	runOnce(ctx, billingSvc, rdb, threshold)
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("reconciler: shutting down")
 			return
 		case <-ticker.C:
-			runOnce(ctx, billingSvc, rdb)
+			runOnce(ctx, billingSvc, rdb, threshold)
 		}
 	}
 }
 
-func runOnce(ctx context.Context, billingSvc *billing.Service, rdb *platredis.Client) {
-	ids, err := billingSvc.ListAccountIDs(ctx)
-	if err != nil {
-		log.Printf("reconciler: list accounts: %v", err)
-		return
-	}
-	for _, id := range ids {
-		ledger, err := billingSvc.LedgerSum(ctx, id)
+func runOnce(ctx context.Context, billingSvc *billing.Service, rdb *platredis.Client, threshold int64) {
+	after := uuid.Nil
+	for {
+		ids, err := billingSvc.ListAccountIDsPage(ctx, after, pageSize)
 		if err != nil {
-			log.Printf("reconciler: ledger sum %s: %v", id, err)
-			continue
+			log.Printf("reconciler: list accounts: %v", err)
+			return
 		}
-		redisBal, err := rdb.GetBalance(ctx, id.String())
-		if err != nil {
-			log.Printf("reconciler: redis balance %s: %v", id, err)
-			continue
+		if len(ids) == 0 {
+			return
 		}
-		switch {
-		case redisBal > ledger:
-			// Dangerous free-credit direction: auto-heal Redis down.
-			metrics.ReconcilerDrift.WithLabelValues("redis_gt_ledger").Inc()
-			log.Printf("reconciler: ALERT redis>%s ledger for %s (redis=%d ledger=%d); healing redis down",
-				"ledger", id, redisBal, ledger)
-			if err := rdb.SetBalance(ctx, id.String(), ledger); err != nil {
-				log.Printf("reconciler: heal failed: %v", err)
-			} else {
-				metrics.ReconcilerHeals.Inc()
+		for _, id := range ids {
+			ledger, err := billingSvc.LedgerSum(ctx, id)
+			if err != nil {
+				log.Printf("reconciler: ledger sum %s: %v", id, err)
+				continue
 			}
-		case redisBal < ledger:
-			// Safe/expected lag direction: alert only.
-			metrics.ReconcilerDrift.WithLabelValues("redis_lt_ledger").Inc()
-			log.Printf("reconciler: WARN redis<ledger for %s (redis=%d ledger=%d); not auto-healing",
-				id, redisBal, ledger)
+			redisBal, err := rdb.GetBalance(ctx, id.String())
+			if err != nil {
+				log.Printf("reconciler: redis balance %s: %v", id, err)
+				continue
+			}
+			drift := redisBal - ledger
+			switch {
+			case drift > threshold:
+				metrics.ReconcilerDrift.WithLabelValues("redis_gt_ledger").Inc()
+				log.Printf("reconciler: ALERT redis>ledger for %s (redis=%d ledger=%d drift=%d); healing redis down",
+					id, redisBal, ledger, drift)
+				if err := rdb.SetBalance(ctx, id.String(), ledger); err != nil {
+					log.Printf("reconciler: heal failed: %v", err)
+				} else {
+					metrics.ReconcilerHeals.Inc()
+				}
+			case drift < -minLagBeforeWarn:
+				metrics.ReconcilerDrift.WithLabelValues("redis_lt_ledger").Inc()
+				log.Printf("reconciler: WARN redis<ledger for %s (redis=%d ledger=%d); not auto-healing",
+					id, redisBal, ledger)
+			}
+			after = id
+		}
+		if int32(len(ids)) < pageSize {
+			return
 		}
 	}
 }

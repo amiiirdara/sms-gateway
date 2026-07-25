@@ -12,6 +12,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/config"
 	"github.com/amiri/sms-gateway/internal/db/sqlc"
 	"github.com/amiri/sms-gateway/internal/domain/billing"
+	"github.com/amiri/sms-gateway/internal/domain/reporting"
 	platch "github.com/amiri/sms-gateway/internal/platform/clickhouse"
 	"github.com/amiri/sms-gateway/internal/platform/httpx"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
@@ -20,7 +21,6 @@ import (
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func main() {
@@ -46,6 +46,7 @@ func main() {
 
 	billingSvc := billing.New(pool, rdb)
 	q := billingSvc.Queries()
+	reports := reporting.New(q, ch)
 	authMw := auth.Middleware(q)
 
 	mux := http.NewServeMux()
@@ -61,10 +62,7 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, "invalid message id")
 			return
 		}
-		msg, err := q.GetMessageByIDForAccount(r.Context(), sqlc.GetMessageByIDForAccountParams{
-			ID:        id,
-			AccountID: acc.ID,
-		})
+		msg, err := reports.GetMessage(r.Context(), acc.ID, id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			httpx.Error(w, http.StatusNotFound, "not found")
 			return
@@ -73,17 +71,7 @@ func main() {
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"id":           msg.ID.String(),
-			"recipient":    msg.Recipient,
-			"priority":     msg.Priority,
-			"cost":         msg.Cost,
-			"status":       msg.Status,
-			"operator":     textOrEmpty(msg.Operator.String, msg.Operator.Valid),
-			"campaignId":   uuidPtr(msg.CampaignID),
-			"createdAt":    msg.CreatedAt.Time,
-			"dispatchedAt": dispatchedAtOrNil(msg.DispatchedAt),
-		})
+		httpx.WriteJSON(w, http.StatusOK, msg)
 	})))
 
 	mux.Handle("GET /v1/reports", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +98,7 @@ func main() {
 			}
 			filter.CampaignID = &id
 		}
-		rows, err := ch.QueryReports(r.Context(), filter)
+		rows, err := reports.ListReports(r.Context(), filter)
 		if err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "query failed")
 			return
@@ -170,7 +158,7 @@ func main() {
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		agg, err := ch.AggregateCampaign(r.Context(), acc.ID, id)
+		agg, err := reports.CampaignAggregate(r.Context(), acc.ID, id)
 		if err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "aggregate failed")
 			return
@@ -216,25 +204,4 @@ func parseRange(r *http.Request) (time.Time, time.Time) {
 		}
 	}
 	return from, to
-}
-
-func uuidPtr(id *uuid.UUID) any {
-	if id == nil {
-		return nil
-	}
-	return id.String()
-}
-
-func textOrEmpty(s string, valid bool) string {
-	if !valid {
-		return ""
-	}
-	return s
-}
-
-func dispatchedAtOrNil(t pgtype.Timestamptz) any {
-	if !t.Valid {
-		return nil
-	}
-	return t.Time
 }

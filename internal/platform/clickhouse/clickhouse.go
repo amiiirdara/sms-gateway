@@ -90,6 +90,21 @@ func (c *Client) InsertMessageEvent(ctx context.Context, e MessageEvent) error {
 	return nil
 }
 
+// EnsureMessageEvent inserts unless an event with the same message_id+status already exists.
+func (c *Client) EnsureMessageEvent(ctx context.Context, e MessageEvent) error {
+	var n uint64
+	if err := c.conn.QueryRow(ctx, `
+		SELECT count() FROM sms_gateway.message_events
+		WHERE message_id = ? AND status = ?
+	`, e.MessageID, e.Status).Scan(&n); err != nil {
+		return fmt.Errorf("clickhouse: exists check: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	return c.InsertMessageEvent(ctx, e)
+}
+
 // ReportFilter scopes a paginated report query.
 type ReportFilter struct {
 	AccountID  uuid.UUID

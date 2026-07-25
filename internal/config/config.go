@@ -38,7 +38,8 @@ func Load(serviceName string) Config {
 		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:        getEnv("DATABASE_URL", "postgres://sms:sms@localhost:5432/sms_gateway?sslmode=disable"),
 		RedisAddr:          getEnv("REDIS_ADDR", "localhost:6379"),
-		KafkaBrokers:       getEnv("KAFKA_BROKERS", "localhost:9092"),
+		// Compose host listener is :9094; in-network services use kafka:9092 via Compose env.
+		KafkaBrokers: getEnv("KAFKA_BROKERS", "localhost:9094"),
 		ClickHouseAddr:     getEnv("CLICKHOUSE_ADDR", "localhost:9000"),
 		ClickHousePassword: getEnv("CLICKHOUSE_PASSWORD", "sms"),
 		SignupRateCapacity: getEnvInt64("SIGNUP_RATE_CAPACITY", 30),

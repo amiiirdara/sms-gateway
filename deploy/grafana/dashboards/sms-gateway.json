@@ -138,6 +138,35 @@
           "refId": "B"
         }
       ]
+    },
+    {
+      "title": "DLQ publishes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum by (consumer) (rate(sms_dlq_published_total[1m]))",
+          "legendFormat": "dlq {{consumer}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Pipeline backlog & reader queue",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(sms_messages_accepted_total) + sum(sms_campaign_messages_expanded_total) - sum(sms_dispatch_total)",
+          "legendFormat": "accept+expand − dispatch",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (consumer) (sms_kafka_reader_queue_length)",
+          "legendFormat": "queue {{consumer}}",
+          "refId": "B"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

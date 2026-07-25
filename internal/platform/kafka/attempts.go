@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	goredis "github.com/redis/go-redis/v9"
 	kafkago "github.com/segmentio/kafka-go"
 )
@@ -87,6 +88,7 @@ func ConsumeLoopWithStore(
 	}
 	topic := reader.Config().Topic
 	for {
+		metrics.KafkaReaderQueue.WithLabelValues(consumerName).Set(float64(reader.Stats().QueueLength))
 		msg, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -114,6 +116,7 @@ func ConsumeLoopWithStore(
 				}
 				continue
 			}
+			metrics.DLQPublished.WithLabelValues(consumerName).Inc()
 			_ = store.Clear(ctx, msg)
 			_ = reader.CommitMessages(ctx, msg)
 		case OutcomeRetry:
@@ -138,6 +141,7 @@ func ConsumeLoopWithStore(
 					}
 					continue
 				}
+				metrics.DLQPublished.WithLabelValues(consumerName).Inc()
 				_ = store.Clear(ctx, msg)
 				_ = reader.CommitMessages(ctx, msg)
 				continue

@@ -18,7 +18,7 @@ In Docker Compose, worker metrics ports are **not** published to the host by def
 
 Source of truth for definitions: [`internal/platform/metrics/metrics.go`](../internal/platform/metrics/metrics.go).
 
-Optional Grafana import: [`docs/grafana-sms-gateway.json`](grafana-sms-gateway.json) (Prometheus datasource; scrape api-gateway `:8080/metrics` and worker `:9090` if published).
+Compose provisions Prometheus (`:9091`) + Grafana (`:3000`) with dashboard [`deploy/grafana/dashboards/sms-gateway.json`](../deploy/grafana/dashboards/sms-gateway.json) and alert rules [`deploy/prometheus/alerts.yml`](../deploy/prometheus/alerts.yml).
 
 Recorded E2E scrape deltas + charts from a local suite run: [scenario-report.md](scenario-report.md) (`make scenarios`).
 
@@ -126,8 +126,10 @@ These answer ops questions: latency, duplicates, retries, HTTP health.
 | `sms_inbox_processed_total` | counter | `consumer` | First-time successful Inbox commits | dispatcher, billing-*, report-sink |
 | `sms_inbox_duplicates_total` | counter | `consumer` | Skipped already-processed events | same |
 | `sms_consumer_handle_errors_total` | counter | `consumer` | Handle failures (no Kafka commit → retry) | same |
+| `sms_dlq_published_total` | counter | `consumer` | Poison / max-retry messages written to `sms.dlq` | kafka ConsumeLoop |
+| `sms_kafka_reader_queue_length` | gauge | `consumer` | kafka-go internal fetch queue (local backlog signal) | kafka ConsumeLoop |
 
-**How to use:** Duplicate ratio = duplicates / (processed+duplicates). Spikes after rebalance/redeploy are normal; sustained high error rate is not.
+**How to use:** Duplicate ratio = duplicates / (processed+duplicates). Spikes after rebalance/redeploy are normal; sustained high error rate is not. Alert on DLQ rate and elevated `accept+expand − dispatch` backlog (see `deploy/prometheus/alerts.yml`).
 
 ### Runtime (built-in)
 
@@ -154,6 +156,12 @@ histogram_quantile(0.95, sum by (le) (rate(sms_dispatch_latency_seconds_bucket{m
 
 # Outbox publish error rate
 sum(rate(sms_outbox_relay_errors_total[5m]))
+
+# DLQ publish rate
+sum(rate(sms_dlq_published_total[5m]))
+
+# Approximate pipeline backlog (not Kafka partition lag)
+sum(sms_messages_accepted_total) + sum(sms_campaign_messages_expanded_total) - sum(sms_dispatch_total)
 ```
 
 ## Label cardinality rules

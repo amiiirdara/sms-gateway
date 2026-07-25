@@ -24,8 +24,9 @@ Wait until services are up. Then:
 | http://localhost:8080 | API gateway (+ `GET /metrics`) |
 | http://localhost:8081 | Reporting API |
 | http://localhost:8080/healthz | Liveness |
-| http://localhost:9091 | Prometheus (optional Compose service) |
+| http://localhost:9091 | Prometheus (optional; alert rules loaded) |
 | http://localhost:3000 | Grafana (admin/`sms`, anonymous Viewer; SMS dashboard provisioned) |
+| http://localhost:8082 | operator-mock (`PUT /admin/failure-rate` for failure injection) |
 
 > **Windows note:** If Adobe Connect (or another app) owns `127.0.0.1:8080`, use `http://[::1]:8080` (IPv6 loopback). PowerShell `http://localhost:8080` often works too (prefers IPv6).
 
@@ -52,9 +53,13 @@ Expect: create → topup → `accepted` → after a few seconds `sent`.
 ```powershell
 powershell -File scripts/smoke-edge.ps1
 # or: make smoke
+
+# Operator always-5xx → failed + refund
+powershell -File scripts/smoke-operator-failure.ps1
+# or: make smoke-failure
 ```
 
-Covers insufficient funds (402), campaign all-or-nothing, spend-to-exact-zero.
+Covers insufficient funds (402), campaign all-or-nothing, spend-to-exact-zero, and operator failure → refund.
 
 ## 4. Optional: E2E scenario suite (~15 s)
 
@@ -92,7 +97,7 @@ Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accept
 | E2E scenario suite (7/7) | PASS — see scenario report |
 | Accept-path load (k6) | PASS — see load-test report |
 | Unit tests | `go test ./internal/domain/... ./internal/platform/httpx/...` |
-| CI | GitHub Actions: `go vet` + `go test -short` |
+| CI | GitHub Actions: `go vet` + `go test -short` + Compose smoke (edge + operator failure) |
 
 ## Key docs
 
@@ -106,7 +111,7 @@ Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accept
 | [architecture.svg](architecture.svg) | One-page system diagram |
 | [scenario-report.md](scenario-report.md) | E2E flows + metric charts |
 | [load-test-report.md](load-test-report.md) | k6 scenario + results |
-| [grafana-sms-gateway.json](grafana-sms-gateway.json) | Optional Grafana dashboard for `sms_*` |
+| [../deploy/grafana/dashboards/sms-gateway.json](../deploy/grafana/dashboards/sms-gateway.json) | Provisioned Grafana dashboard (+ Prometheus alerts) |
 
 ## Mental model (30 seconds)
 

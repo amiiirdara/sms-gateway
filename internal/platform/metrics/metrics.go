@@ -169,6 +169,16 @@ var (
 		Help: "Consumer handle failures that will be retried (no commit)",
 	}, []string{"consumer"})
 
+	DLQPublished = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sms_dlq_published_total",
+		Help: "Messages published to sms.dlq after poison or exhausted retries",
+	}, []string{"consumer"})
+
+	KafkaReaderQueue = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "sms_kafka_reader_queue_length",
+		Help: "kafka-go reader internal fetch queue length (local backlog signal)",
+	}, []string{"consumer"})
+
 	OperatorSendDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "sms_operator_send_duration_seconds",
 		Help:    "Latency of operator adapter HTTP send",

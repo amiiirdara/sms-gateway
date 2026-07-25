@@ -22,3 +22,45 @@ jobs:
 
       - name: go test (unit, skip testcontainers)
         run: go test ./... -short -count=1
+
+  smoke:
+    name: compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Compose stack
+        run: docker compose up -d --build
+
+      - name: Wait for api-gateway health
+        run: |
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+              echo "api-gateway healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "api-gateway did not become healthy"
+          docker compose ps
+          docker compose logs --tail=80 api-gateway || true
+          exit 1
+
+      - name: Edge smoke
+        shell: pwsh
+        env:
+          BASE_URL: http://127.0.0.1:8080
+        run: ./scripts/smoke-edge.ps1
+
+      - name: Operator failure-injection smoke
+        shell: pwsh
+        env:
+          BASE_URL: http://127.0.0.1:8080
+          REPORT_URL: http://127.0.0.1:8081
+          OPERATOR_URL: http://127.0.0.1:8082
+        run: ./scripts/smoke-operator-failure.ps1
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --tail=120

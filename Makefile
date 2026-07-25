@@ -1,6 +1,6 @@
 # SMS Gateway — common local commands (GNU Make / Git Bash on Windows).
 
-.PHONY: up down build test test-integration smoke scenarios load-test load-mixed vet sqlc migrate-up
+.PHONY: up down build test test-integration smoke smoke-failure scenarios load-test load-mixed vet sqlc migrate-up
 
 up:
 	docker compose up -d --build
@@ -32,6 +32,10 @@ test-integration:
 
 smoke:
 	powershell -NoProfile -File scripts/smoke-edge.ps1
+
+# Operator always-5xx → message failed + credit refunded.
+smoke-failure:
+	powershell -NoProfile -File scripts/smoke-operator-failure.ps1
 
 # E2E scenario suite → docs/scenario-report/results.json (Compose stack must be up).
 scenarios:

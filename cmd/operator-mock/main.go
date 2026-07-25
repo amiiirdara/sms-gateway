@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
@@ -29,15 +31,45 @@ type sendResponse struct {
 	Status string `json:"status"`
 }
 
+type failureRateBody struct {
+	FailureRate float64 `json:"failureRate"`
+}
+
 func main() {
 	cfg := config.Load("operator-mock")
 	failureRate := envFloat("OPERATOR_MOCK_FAILURE_RATE", 0.02)
 	minLatency := envDuration("OPERATOR_MOCK_MIN_LATENCY", 50*time.Millisecond)
 	maxLatency := envDuration("OPERATOR_MOCK_MAX_LATENCY", 400*time.Millisecond)
 
+	var rateBits atomic.Uint64
+	rateBits.Store(math.Float64bits(failureRate))
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/admin/failure-rate", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(failureRateBody{FailureRate: math.Float64frombits(rateBits.Load())})
+		case http.MethodPut, http.MethodPost:
+			var body failureRateBody
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			if body.FailureRate < 0 || body.FailureRate > 1 {
+				http.Error(w, "failureRate must be in [0,1]", http.StatusBadRequest)
+				return
+			}
+			rateBits.Store(math.Float64bits(body.FailureRate))
+			log.Printf("operator-mock: failureRate set to %.2f", body.FailureRate)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(failureRateBody{FailureRate: body.FailureRate})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 	mux.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -53,7 +85,7 @@ func main() {
 		jitter := minLatency + time.Duration(rand.Int63n(int64(maxLatency-minLatency)+1))
 		time.Sleep(jitter)
 
-		if rand.Float64() < failureRate {
+		if rand.Float64() < math.Float64frombits(rateBits.Load()) {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(sendResponse{Status: "failed"})
 			return

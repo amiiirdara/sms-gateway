@@ -8,7 +8,7 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 
 **Repo:** https://github.com/amiiirdara/sms-gateway
 
-**Verified locally:** create → topup → normal/Express/`campaign` → `sent`; edge 402/AoN/exact-zero; E2E scenario suite 7/7 (see [scenario report](docs/scenario-report.md)); k6 accept-path 20/s × 30s (see [load-test report](docs/load-test-report.md)); CI runs `go vet` + `go test -short` on every push.
+**Verified locally:** create → topup → normal/Express/`campaign` → `sent`; edge 402/AoN/exact-zero; operator failure → refund; E2E scenario suite 7/7 (see [scenario report](docs/scenario-report.md)); k6 accept-path + mixed Express/campaign; CI runs `go vet` + `go test -short` + Compose smoke on every push.
 
 ## Documentation
 
@@ -19,15 +19,15 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 | [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png) | One-page visual of the accept → Kafka → dispatch / billing / reports flow |
 | [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract (paths, auth, request/response schemas) |
 | [docs/metrics.md](docs/metrics.md) | Prometheus catalog — business + technical metrics ([code](internal/platform/metrics/metrics.go)) |
-| [docs/grafana-sms-gateway.json](docs/grafana-sms-gateway.json) | Optional Grafana dashboard for `sms_*` metrics |
+| [deploy/grafana/dashboards/sms-gateway.json](deploy/grafana/dashboards/sms-gateway.json) | Provisioned Grafana dashboard (Compose Prometheus/Grafana) |
 | [docs/security-ops-checklist.md](docs/security-ops-checklist.md) | Tenant isolation, API-key hashing, rate limits, Inbox, billing controls |
 | [docs/trade-offs.md](docs/trade-offs.md) | Deliberate non-goals; why 100M/day isn’t proven on Compose and what a real proof needs |
 | [docs/load-test-report.md](docs/load-test-report.md) | k6 accept-path scenario, thresholds, execution notes, and recorded run results |
 | [docs/scenario-report.md](docs/scenario-report.md) | E2E scenario suite (7 flows) with Prometheus deltas, worker scrapes, and charts |
 | [AGENTS.md](AGENTS.md) | Repo orientation for contributors / AI agents (layout, non-negotiables) |
 | [LICENSE](LICENSE) | MIT |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: `go vet` + `go test -short` on push/PR |
-| [Makefile](Makefile) | `make up` / `make test` / `make smoke` / `make scenarios` / `make load-test` |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI: `go vet` + `go test -short` + Compose smoke on push/PR |
+| [Makefile](Makefile) | `make up` / `make test` / `make smoke` / `make smoke-failure` / `make scenarios` / `make load-test` |
 
 ## What is implemented
 

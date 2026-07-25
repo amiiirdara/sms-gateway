@@ -1,0 +1,52 @@
+groups:
+  - name: sms-gateway
+    rules:
+      - alert: SMSDLQPublishRate
+        expr: sum(rate(sms_dlq_published_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Messages are being published to sms.dlq
+          description: "DLQ publish rate is {{ $value | humanize }} /s over 5m."
+
+      - alert: SMSConsumerHandleErrors
+        expr: sum by (consumer) (rate(sms_consumer_handle_errors_total[5m])) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Consumer {{ $labels.consumer }} is retrying handle failures
+          description: "Handle error rate {{ $value | humanize }} /s for {{ $labels.consumer }}."
+
+      - alert: SMSOutboxRelayErrors
+        expr: sum(rate(sms_outbox_relay_errors_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Outbox relay publish/ack errors
+          description: "Outbox error rate {{ $value | humanize }} /s — accept path may stall."
+
+      - alert: SMSPipelineBacklog
+        expr: |
+          (
+            sum(sms_messages_accepted_total)
+            + sum(sms_campaign_messages_expanded_total)
+            - sum(sms_dispatch_total)
+          ) > 100
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: Accept/expand vs dispatch backlog is elevated
+          description: "Approx pipeline backlog {{ $value }} (accepted+expanded − dispatched)."
+
+      - alert: SMSKafkaReaderQueue
+        expr: max by (consumer) (sms_kafka_reader_queue_length) > 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka reader queue backlog for {{ $labels.consumer }}
+          description: "Reader queue length {{ $value }} (local lag signal)."

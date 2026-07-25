@@ -2,7 +2,7 @@
 # Usage: powershell -File scripts/smoke-edge.ps1
 
 $ErrorActionPreference = "Stop"
-$base = "http://localhost:8080"
+$base = if ($env:BASE_URL) { $env:BASE_URL } else { "http://localhost:8080" }
 
 function New-Account([string]$name) {
   Invoke-RestMethod -Method Post -Uri "$base/v1/accounts" -ContentType "application/json" -Body (@{ name = $name } | ConvertTo-Json)

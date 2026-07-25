@@ -1,6 +1,6 @@
 # SMS Gateway — common local commands (GNU Make / Git Bash on Windows).
 
-.PHONY: up down build test test-integration smoke scenarios load-test vet sqlc migrate-up
+.PHONY: up down build test test-integration smoke scenarios load-test load-mixed vet sqlc migrate-up
 
 up:
 	docker compose up -d --build
@@ -40,3 +40,7 @@ scenarios:
 # Override BASE_URL if Adobe Connect owns 127.0.0.1:8080 (e.g. http://[::1]:8080).
 load-test:
 	k6 run scripts/load-accept.js
+
+# Mixed Express + small-campaign accept load.
+load-mixed:
+	k6 run scripts/load-express-campaign.js

@@ -155,6 +155,8 @@ Deliberately **not** built (see [docs/trade-offs.md](docs/trade-offs.md)): real 
 |---|---|
 | api-gateway | http://localhost:8080 (`/metrics` for Prometheus) |
 | reporting-api | http://localhost:8081 |
+| Prometheus (optional) | http://localhost:9091 |
+| Grafana (optional) | http://localhost:3000 (`admin`/`sms`) |
 | Postgres | localhost:5432 (`sms`/`sms`, db `sms_gateway`) |
 | Redis | localhost:6379 |
 | Kafka (host) | localhost:9094 |

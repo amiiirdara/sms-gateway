@@ -19,6 +19,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
 	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
+	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	kafkago "github.com/segmentio/kafka-go"
@@ -41,6 +42,12 @@ func main() {
 	}
 	defer ch.Close()
 
+	rdb, err := platredis.NewClient(ctx, cfg.RedisAddr)
+	if err != nil {
+		log.Fatalf("report-sink: redis: %v", err)
+	}
+	defer rdb.Close()
+
 	inboxStore := inbox.New(pool)
 	q := sqlc.New(pool)
 	reader := platkafka.NewReader(cfg.KafkaBrokers, platkafka.TopicDispatchResults, "report-sink")
@@ -51,7 +58,8 @@ func main() {
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
 	log.Println("report-sink: started")
-	platkafka.ConsumeLoop(ctx, reader, dlqW, "report-sink", platkafka.DefaultMaxAttempts,
+	platkafka.ConsumeLoopWithStore(ctx, reader, dlqW, "report-sink", platkafka.DefaultMaxAttempts,
+		platkafka.NewRedisAttemptStore(rdb.Raw(), "report-sink"),
 		func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
 			err := handle(ctx, msg, inboxStore, q, ch)
 			if err == nil {

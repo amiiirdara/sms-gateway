@@ -18,7 +18,7 @@ This project is a **lean, demo-scale Compose build** designed so each piece *can
 | Not built | Why |
 |---|---|
 | **100M/day load proof** | Capacity campaign, not another feature — details below |
-| Full Prometheus + Grafana stack in Compose | Metrics are exported; scraping/alerting UI is out of scope |
+| Production-grade multi-replica observability | Optional Prometheus + Grafana are in Compose for demos; no HA/alerting rules |
 | Chaos / partition testing harness | Inbox/Outbox designed for retries; no automated chaos suite |
 
 ### Can you prove 100M/day?

@@ -53,17 +53,18 @@ func main() {
 	defer resultsR.Close()
 
 	log.Println("billing-consumer: started")
-	go platkafka.ConsumeLoop(ctx, normalR, dlqW, "billing-debit-normal", platkafka.DefaultMaxAttempts,
-		debitHandler(inboxStore, billingSvc, "billing-debit-normal"),
-		func(err error) { log.Printf("billing-consumer: %v", err) },
+	onErr := func(err error) { log.Printf("billing-consumer: %v", err) }
+	go platkafka.ConsumeLoopWithStore(ctx, normalR, dlqW, "billing-debit-normal", platkafka.DefaultMaxAttempts,
+		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-debit-normal"),
+		debitHandler(inboxStore, billingSvc, "billing-debit-normal"), onErr,
 	)
-	go platkafka.ConsumeLoop(ctx, expressR, dlqW, "billing-debit-express", platkafka.DefaultMaxAttempts,
-		debitHandler(inboxStore, billingSvc, "billing-debit-express"),
-		func(err error) { log.Printf("billing-consumer: %v", err) },
+	go platkafka.ConsumeLoopWithStore(ctx, expressR, dlqW, "billing-debit-express", platkafka.DefaultMaxAttempts,
+		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-debit-express"),
+		debitHandler(inboxStore, billingSvc, "billing-debit-express"), onErr,
 	)
-	platkafka.ConsumeLoop(ctx, resultsR, dlqW, "billing-refund", platkafka.DefaultMaxAttempts,
-		refundHandler(inboxStore, billingSvc),
-		func(err error) { log.Printf("billing-consumer: %v", err) },
+	platkafka.ConsumeLoopWithStore(ctx, resultsR, dlqW, "billing-refund", platkafka.DefaultMaxAttempts,
+		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-refund"),
+		refundHandler(inboxStore, billingSvc), onErr,
 	)
 	log.Println("billing-consumer: shutting down")
 }

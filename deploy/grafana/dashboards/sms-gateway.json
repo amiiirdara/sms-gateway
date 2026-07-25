@@ -1,0 +1,151 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "text",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Accept TPS",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(sms_messages_accepted_total[1m]))",
+          "legendFormat": "accepted",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sms_messages_rejected_total[1m]))",
+          "legendFormat": "rejected",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Credits spent / refunded",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(sms_credits_spent_total[1m]))",
+          "legendFormat": "spent",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sms_credits_refunded_total[1m]))",
+          "legendFormat": "refunded",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Dispatch outcomes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(sms_dispatch_total[1m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Express SLA misses",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(sms_express_sla_missed_total[1m]))",
+          "legendFormat": "sla_missed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Accept latency p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sms_accept_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Dispatch latency p95 (accept→result)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sms_dispatch_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Outbox relay & rate limits",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(sms_outbox_relayed_total[1m]))",
+          "legendFormat": "relayed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sms_outbox_relay_errors_total[1m]))",
+          "legendFormat": "relay_errors",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (scope) (rate(sms_rate_limited_total[1m]))",
+          "legendFormat": "429 {{scope}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Inbox duplicates / errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum by (consumer) (rate(sms_inbox_duplicates_total[1m]))",
+          "legendFormat": "dup {{consumer}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (consumer) (rate(sms_consumer_handle_errors_total[1m]))",
+          "legendFormat": "err {{consumer}}",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["sms-gateway", "prometheus"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "title": "SMS Gateway",
+  "uid": "sms-gateway",
+  "version": 1
+}

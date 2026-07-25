@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: api-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api-gateway:8080"]
+
+  - job_name: workers
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - dispatcher-normal:9090
+          - dispatcher-express:9090
+          - outbox-relay:9090
+          - billing-consumer:9090
+          - report-sink:9090
+          - campaign-expander:9090
+          - reconciler:9090

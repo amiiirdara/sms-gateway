@@ -90,6 +90,14 @@ Because both happen atomically, it is impossible to decrement the balance withou
 
 Kafka is at-least-once, so every consumer (`dispatcher`, `report-sink`, `billing-consumer`, `campaign-expander`) can see the same message more than once. Each keeps an Inbox/dedup check before any side effect: a Postgres table `processed_events(consumer_name, event_id, processed_at)` with a unique constraint on `(consumer_name, event_id)`, checked-or-inserted in the same transaction as the business write. Duplicate delivery becomes safe by construction (never double-charge, never double-send).
 
+**Ordering rules (crash-safe):**
+
+- **Dispatcher:** call the operator **outside** any Postgres TX; short TX for Inbox + message rows; publish `sms.dispatch-results` after commit. If Inbox already shows processed (commit succeeded, publish failed), **republish** the result from Postgres instead of no-opping.
+- **Billing refunds:** write ledger + Inbox, **commit**, then credit Redis. Never `INCR` Redis before Commit. On Inbox duplicate, `AlignRedisToLedger` repairs a missing credit. Partial unique indexes enforce one debit and one refund per `message_id`.
+- **Report-sink:** Postgres status writes → ClickHouse ensure-insert → Inbox mark (Inbox only after both stores succeed). ClickHouse uses `ReplacingMergeTree` + an exists-check for idempotent retries.
+- **Accept idempotency:** `Idempotency-Key` is reserved inside the Redis Lua debit script (not a separate GET/SET race).
+- **DLQ:** consumers use bounded retries (`ConsumeLoopWithStore`, Redis-backed attempt counters) then publish to `sms.dlq`.
+
 ### 5.3 What reconciliation is for
 
 `cmd/reconciler` runs periodically to **detect and alert**, only auto-healing in the safe direction:

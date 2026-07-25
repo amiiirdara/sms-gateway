@@ -4,7 +4,7 @@ Quick path for challenge reviewers. Full design: [ARCHITECTURE.md](../ARCHITECTU
 
 ## Submission blurb (paste into the challenge form)
 
-> Multi-tenant SMS Gateway in Go (Kafka, Redis, Postgres, ClickHouse). Prepaid credit with atomic Redis Lua debit + Redis Streams outbox into Kafka; Inbox-deduped consumers for dispatch, billing, and reporting. Express lane with a 2-minute hard deadline (drop + refund). Campaigns are normal-priority, all-or-nothing. Tenant identity always from API key. Lean Docker Compose demo designed toward ~100M SMS/day (not load-proven at that scale). Docs: architecture, OpenAPI, Prometheus metrics catalog, security checklist, E2E scenario report, k6 accept-path report. Repo: https://github.com/amiiirdara/sms-gateway — start at `docs/reviewer-guide.md`.
+> Multi-tenant SMS Gateway in Go (Kafka, Redis, Postgres, ClickHouse). Prepaid credit with atomic Redis Lua debit + outbox (incl. Idempotency-Key in Lua); Inbox-deduped consumers with crash-safe ordering, Redis-backed retries, and `sms.dlq`. Express 2-minute hard deadline (drop + refund). Campaigns normal-priority, all-or-nothing, with expansion cursors. Tenant identity from API key only. Lean Compose demo (+ optional Prometheus/Grafana) aimed at ~100M SMS/day design (not load-proven at that scale). Docs: architecture, OpenAPI, metrics, security, E2E scenarios, k6. Repo: https://github.com/amiiirdara/sms-gateway — start at `docs/reviewer-guide.md`.
 
 ## 1. Start the stack (~2–3 min)
 
@@ -24,6 +24,8 @@ Wait until services are up. Then:
 | http://localhost:8080 | API gateway (+ `GET /metrics`) |
 | http://localhost:8081 | Reporting API |
 | http://localhost:8080/healthz | Liveness |
+| http://localhost:9091 | Prometheus (optional Compose service) |
+| http://localhost:3000 | Grafana (admin/`sms`, anonymous Viewer; SMS dashboard provisioned) |
 
 > **Windows note:** If Adobe Connect (or another app) owns `127.0.0.1:8080`, use `http://[::1]:8080` (IPv6 loopback). PowerShell `http://localhost:8080` often works too (prefers IPv6).
 
@@ -69,6 +71,10 @@ Seven flows (normal / Express / campaign / 402 / AoN / validation / burst) with 
 $env:BASE_URL = 'http://[::1]:8080'   # or http://localhost:8080
 k6 run scripts/load-accept.js
 # or: make load-test
+
+# Mixed Express + campaign accept path
+k6 run scripts/load-express-campaign.js
+# or: make load-mixed
 ```
 
 Report: [load-test-report.md](load-test-report.md) (20 req/s × 30s, ~600 accepts, p95 &lt; 10 ms in recorded runs).

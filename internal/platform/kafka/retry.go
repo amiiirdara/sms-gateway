@@ -3,7 +3,6 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 
@@ -103,7 +102,9 @@ func (t *AttemptTracker) Clear(msg kafkago.Message) {
 	delete(t.data, t.key(msg))
 }
 
-// ConsumeLoop runs Fetch → handle → commit / retry / DLQ.
+// ConsumeLoop runs Fetch → handle → commit / retry / DLQ using an in-memory
+// attempt counter. Prefer ConsumeLoopWithStore with RedisAttemptStore in
+// production so retries survive process restarts.
 func ConsumeLoop(
 	ctx context.Context,
 	reader *kafkago.Reader,
@@ -113,63 +114,5 @@ func ConsumeLoop(
 	handle func(context.Context, kafkago.Message) (HandleOutcome, error),
 	onError func(error),
 ) {
-	if maxAttempts < 1 {
-		maxAttempts = DefaultMaxAttempts
-	}
-	tracker := NewAttemptTracker()
-	topic := reader.Config().Topic
-	for {
-		msg, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if onError != nil {
-				onError(fmt.Errorf("fetch: %w", err))
-			}
-			time.Sleep(time.Second)
-			continue
-		}
-		outcome, herr := handle(ctx, msg)
-		switch outcome {
-		case OutcomeOK:
-			tracker.Clear(msg)
-			_ = reader.CommitMessages(ctx, msg)
-		case OutcomePoison:
-			reason := "poison"
-			if herr != nil {
-				reason = herr.Error()
-			}
-			if err := PublishDLQ(ctx, dlq, topic, consumerName, reason, msg, 1); err != nil {
-				if onError != nil {
-					onError(fmt.Errorf("dlq: %w", err))
-				}
-				continue
-			}
-			tracker.Clear(msg)
-			_ = reader.CommitMessages(ctx, msg)
-		case OutcomeRetry:
-			n := tracker.Inc(msg)
-			if onError != nil && herr != nil {
-				onError(herr)
-			}
-			if n >= maxAttempts {
-				reason := "max attempts exceeded"
-				if herr != nil {
-					reason = herr.Error()
-				}
-				if err := PublishDLQ(ctx, dlq, topic, consumerName, reason, msg, n); err != nil {
-					if onError != nil {
-						onError(fmt.Errorf("dlq: %w", err))
-					}
-					continue
-				}
-				tracker.Clear(msg)
-				_ = reader.CommitMessages(ctx, msg)
-				continue
-			}
-			time.Sleep(Backoff(n))
-			// Leave uncommitted so the same record is redelivered.
-		}
-	}
+	ConsumeLoopWithStore(ctx, reader, dlq, consumerName, maxAttempts, NewMemoryAttemptStore(), handle, onError)
 }

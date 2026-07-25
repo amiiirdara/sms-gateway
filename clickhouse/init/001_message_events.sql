@@ -1,6 +1,10 @@
 -- ClickHouse reporting store. See ARCHITECTURE.md sections 5, 9, 11.
--- Populated by the Report Sink consumer from `sms.dispatch-results` (and the
--- initial accepted event); never written to synchronously from the API.
+-- Populated by the Report Sink consumer from `sms.dispatch-results`;
+-- never written to synchronously from the API.
+--
+-- ReplacingMergeTree(event_time) collapses duplicate (message_id, status)
+-- rows from consumer retries after background merges. report-sink also
+-- EnsureMessageEvent-checks before insert for immediate idempotency.
 
 CREATE DATABASE IF NOT EXISTS sms_gateway;
 
@@ -16,7 +20,7 @@ CREATE TABLE IF NOT EXISTS sms_gateway.message_events
     cost         Int64,
     operator     LowCardinality(String)
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree(event_time)
 PARTITION BY toYYYYMM(event_time)
-ORDER BY (account_id, event_time)
-TTL toDateTime(event_time) + INTERVAL 2 YEAR; -- adjust retention as needed
+ORDER BY (account_id, message_id, status)
+TTL toDateTime(event_time) + INTERVAL 2 YEAR;

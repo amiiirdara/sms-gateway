@@ -7,7 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -18,8 +18,10 @@ import (
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
+	"github.com/amiri/sms-gateway/internal/platform/logx"
 	"github.com/amiri/sms-gateway/internal/platform/metrics"
 	"github.com/amiri/sms-gateway/internal/platform/postgres"
+	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -30,18 +32,28 @@ func main() {
 	mode := flag.String("mode", "normal", "dispatcher mode: normal|express")
 	flag.Parse()
 	if *mode != "normal" && *mode != "express" {
-		log.Fatalf("dispatcher: invalid mode %q", *mode)
+		fmt.Fprintf(os.Stderr, "dispatcher: invalid mode %q\n", *mode)
+		os.Exit(2)
 	}
 
 	cfg := config.Load("dispatcher-" + *mode)
 	ctx, stop := lifecycle.WithShutdownSignal(context.Background())
 	defer stop()
 
+	logger := logx.New("dispatcher-" + *mode)
+
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("dispatcher: postgres: %v", err)
+		logger.Error("postgres", "err", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
+	rdb, err := platredis.NewClient(ctx, cfg.RedisAddr)
+	if err != nil {
+		logger.Error("redis", "err", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
 	inboxStore := inbox.New(pool)
 	q := sqlc.New(pool)
 
@@ -67,11 +79,12 @@ func main() {
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 	consumer := "dispatcher-" + *mode
-	log.Printf("dispatcher: started mode=%s topic=%s", *mode, topic)
+	logger.Info("started", "mode", *mode, "topic", topic)
 
-	platkafka.ConsumeLoop(ctx, reader, dlqW, consumer, platkafka.DefaultMaxAttempts,
+	platkafka.ConsumeLoopWithStore(ctx, reader, dlqW, consumer, platkafka.DefaultMaxAttempts,
+		platkafka.NewRedisAttemptStore(rdb.Raw(), consumer),
 		func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
-			err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router)
+			err := handle(ctx, *mode, msg, inboxStore, q, resultsW, router, logger)
 			if err == nil {
 				return platkafka.OutcomeOK, nil
 			}
@@ -82,9 +95,9 @@ func main() {
 			metrics.ConsumerHandleErrors.WithLabelValues(consumer).Inc()
 			return platkafka.OutcomeRetry, err
 		},
-		func(err error) { log.Printf("dispatcher: %v", err) },
+		func(err error) { logger.Error("loop", "err", err) },
 	)
-	log.Println("dispatcher: shutting down")
+	logger.Info("shutting down")
 }
 
 var errPoison = errors.New("poison message")
@@ -97,6 +110,7 @@ func handle(
 	q *sqlc.Queries,
 	resultsW *kafkago.Writer,
 	router *operator.Router,
+	logger *slog.Logger,
 ) error {
 	var ev messaging.AcceptedMessage
 	if err := json.Unmarshal(msg.Value, &ev); err != nil {
@@ -104,6 +118,11 @@ func handle(
 	}
 	if ev.MessageID == "" || ev.AccountID == "" {
 		return fmt.Errorf("%w: missing messageId/accountId", errPoison)
+	}
+	ctx = logx.WithMessageID(ctx, ev.MessageID)
+	ctx = logx.WithAccountID(ctx, ev.AccountID)
+	if ev.CampaignID != "" {
+		ctx = logx.WithCampaignID(ctx, ev.CampaignID)
 	}
 
 	consumer := "dispatcher-" + mode
@@ -116,6 +135,7 @@ func handle(
 	}
 	if done {
 		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
+		logx.Info(ctx, logger, "republish dispatch-results after inbox hit")
 		return republishFromDB(ctx, q, resultsW, ev)
 	}
 

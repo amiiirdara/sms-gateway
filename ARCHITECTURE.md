@@ -2,6 +2,8 @@
 
 Status: **v1 — implemented and verified locally via Docker Compose** (happy-path + edge smokes, [E2E scenario suite](docs/scenario-report.md), [k6 accept-path](docs/load-test-report.md)).
 
+Brief whole-project tour (with links back here): [docs/project-report.md](docs/project-report.md).
+
 ## 1. Overview
 
 A multi-tenant SMS Gateway: tenants (businesses) send SMS to any phone number via a REST API, must maintain a prepaid credit balance to do so, and can retrieve delivery reports for single messages and bulk campaigns. The system is designed for ~100M messages/day with highly skewed per-tenant traffic, and offers a premium "Express" lane with a hard delivery-time SLA (e.g. for OTP codes).

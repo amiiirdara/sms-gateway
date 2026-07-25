@@ -14,7 +14,8 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 
 | Doc | Brief |
 |---|---|
-| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here** — submission blurb, Compose up, smoke, edge script, k6 (~5 min) |
+| [docs/project-report.md](docs/project-report.md) | **Full project report** — brief tour of everything, with links into deeper docs |
+| [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here (demo)** — submission blurb, Compose up, smoke, edge script, k6 (~5 min) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full system design: Outbox/Inbox, Express SLA, campaigns, data model, API surface |
 | [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png) | One-page visual of the accept → Kafka → dispatch / billing / reports flow |
 | [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract (paths, auth, request/response schemas) |

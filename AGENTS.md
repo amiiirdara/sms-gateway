@@ -4,7 +4,7 @@ Orientation for any agent (or human) working on this repo cold.
 
 ## What this is
 
-A multi-tenant SMS Gateway (send SMS, manage prepaid credit, batch "campaign" sends, delivery reports) built in Go. Full design rationale lives in [ARCHITECTURE.md](ARCHITECTURE.md) - read it before making non-trivial changes, especially before touching balance/billing logic, the Outbox/Inbox pipeline, or the Express SLA path.
+A multi-tenant SMS Gateway (send SMS, manage prepaid credit, batch "campaign" sends, delivery reports) built in Go. Brief whole-project map: [docs/project-report.md](docs/project-report.md). Full design rationale lives in [ARCHITECTURE.md](ARCHITECTURE.md) - read it before making non-trivial changes, especially before touching balance/billing logic, the Outbox/Inbox pipeline, or the Express SLA path.
 
 ## Repo layout
 

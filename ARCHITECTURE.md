@@ -33,6 +33,50 @@ This document is the source of truth for the system design. It intentionally fav
 | Postgres tooling | `pgx` + `sqlc` + `golang-migrate` | Compile-time-checked SQL, zero ORM/reflection overhead, full control over query shape. No GORM. |
 | Consistency mechanism | **Outbox (Redis Streams) + Inbox pattern** | See section 5 - solves the "hot-path store and durable store can drift" problem without relying on fragile reconciliation. |
 
+### Why are the reporting APIs separated from the API gateway? 
+
+They're separate **services**, not just different ports. The `8080` / `8081` split is how Compose maps two containers that both listen on `:8080` inside the network onto the host without colliding.
+
+#### What each does
+
+| | **API Gateway** (`:8080`) | **Reporting API** (`:8081`) |
+|---|---|---|
+| Role | Write / accept path | Read / query path |
+| Endpoints | accounts, topups, send SMS, campaigns | message status, reports, campaign aggregates |
+| Stores | Postgres + Redis (Lua debit + outbox) | Postgres + ClickHouse (+ Redis for auth) |
+
+That matches the CQRS shape: gateway accepts and debits; ClickHouse is the analytics read side; `reporting-api` serves status/reports.
+
+#### Why separate them
+
+1. **Protect the hot path** — Accept is latency-critical (auth, rate limit, Redis Lua). Heavy report queries against ClickHouse must not share that process or connection pool.
+
+2. **Different dependencies** — Gateway never talks to ClickHouse. Reporting is the only HTTP binary that does. Keeping them apart avoids pulling analytics into the accept binary.
+
+3. **Independent scale / failure** — You can scale or restart reporting without taking down ingest (and vice versa). A ClickHouse blip shouldn't take down `POST /v1/messages`.
+
+4. **Bounded contexts** — Write logic lives in `billing` / `messaging` / `campaigns`; read shaping in `reporting`. Separate `cmd/` binaries match that.
+
+#### About the ports
+
+In Compose, both use `HTTP_ADDR: ":8080"` in-container; only the host publish differs:
+
+```133:151:docker-compose.yml
+  api-gateway:
+    ...
+    ports:
+      - "8080:8080"
+
+  reporting-api:
+    ...
+    ports:
+      - "8081:8080"
+```
+
+`GET /metrics` is on the gateway because accept-path Prometheus metrics are emitted there; workers expose their own metrics via `METRICS_ADDR`, not via reporting-api.
+
+**Bottom line:** separation is intentional CQRS / load isolation — command API vs read API — not an arbitrary port choice.
+
 ## 4. High-level architecture (single-message flow)
 
 Static diagram: [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png)

@@ -66,7 +66,7 @@
   <!-- Billing / Report -->
   <rect class="box" x="500" y="320" width="130" height="56" rx="8"/>
   <text class="lbl" x="565" y="345">Billing</text>
-  <text class="sub" x="565" y="362">ledger + refund</text>
+  <text class="sub" x="565" y="362">durable Δ + refund</text>
 
   <rect class="box" x="500" y="410" width="130" height="56" rx="8"/>
   <text class="lbl" x="565" y="435">Report Sink</text>

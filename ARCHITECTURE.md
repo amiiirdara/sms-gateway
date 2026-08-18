@@ -27,9 +27,11 @@ This document is the source of truth for the system design. It intentionally fav
 |---|---|---|
 | Message broker | **Kafka** | Durable buffering, independent consumer groups per concern (dispatch/billing/reporting), replay, partition-based tenant isolation at 100M/day scale. |
 | Language | **Go** | Matches the brief's stated preference; strong concurrency primitives for high-throughput I/O-bound services. |
-| Balance store | **Redis** (atomic Lua) | Sub-millisecond atomic check-and-decrement under massive concurrency; see section 5. |
-| System of record | **PostgreSQL** | Strong consistency for accounts, credit ledger, message/campaign state and history. |
-| Reporting store | **ClickHouse** | Purpose-built for high-ingest, aggregation-heavy "give me my report" queries at 100M-rows/day scale (CQRS read side). |
+| Live balance | **Redis** (atomic Lua) | Sub-millisecond atomic check-and-decrement under massive concurrency; see section 5. Accept and `GET /v1/balance` use this number. |
+| Durable balance | **PostgreSQL** (`accounts.balance`) | Mutated column — the prepaid amount that has been durably applied. Heal and cold-start trust this number. Never a SUM of a log. |
+| Credit log | **ClickHouse** (`credit_events`) | Append-only topup/debit/refund history. Never summed to produce a balance. |
+| System of record | **PostgreSQL** | Strong consistency for accounts, durable balance, message/campaign state and Inbox. |
+| Reporting store | **ClickHouse** | Purpose-built for high-ingest, aggregation-heavy "give me my report" queries at 100M-rows/day scale (CQRS read side), plus the credit log. |
 | Postgres tooling | `pgx` + `sqlc` + `golang-migrate` | Compile-time-checked SQL, zero ORM/reflection overhead, full control over query shape. No GORM. |
 | Consistency mechanism | **Outbox (Redis Streams) + Inbox pattern** | See section 5 - solves the "hot-path store and durable store can drift" problem without relying on fragile reconciliation. |
 
@@ -43,17 +45,17 @@ They're separate **services**, not just different ports. The `8080` / `8081` spl
 |---|---|---|
 | Role | Write / accept path | Read / query path |
 | Endpoints | accounts, topups, send SMS, campaigns | message status, reports, campaign aggregates |
-| Stores | Postgres + Redis (Lua debit + outbox) | Postgres + ClickHouse (+ Redis for auth) |
+| Stores | Postgres + Redis (Lua debit + outbox); ClickHouse credit-log append on topup | Postgres + ClickHouse (+ Redis for auth) |
 
-That matches the CQRS shape: gateway accepts and debits; ClickHouse is the analytics read side; `reporting-api` serves status/reports.
+That matches the CQRS shape: gateway accepts and debits live balance; ClickHouse is the analytics / credit-log read side; `reporting-api` serves status/reports.
 
 #### Why separate them
 
 1. **Protect the hot path** — Accept is latency-critical (auth, rate limit, Redis Lua). Heavy report queries against ClickHouse must not share that process or connection pool.
 
-2. **Different dependencies** — Gateway never talks to ClickHouse. Reporting is the only HTTP binary that does. Keeping them apart avoids pulling analytics into the accept binary.
+2. **Different dependencies** — Report **queries** live only on `reporting-api`. The gateway may append a credit-log row on topup (after durable commit); accept (`POST /v1/messages`) still does not talk to ClickHouse. Keeping heavy analytics out of the accept binary protects the hot path.
 
-3. **Independent scale / failure** — You can scale or restart reporting without taking down ingest (and vice versa). A ClickHouse blip shouldn't take down `POST /v1/messages`.
+3. **Independent scale / failure** — You can scale or restart reporting without taking down ingest (and vice versa). A ClickHouse blip must not take down `POST /v1/messages` (credit-log append is after money commits; a blip must not block durable catch-up).
 
 4. **Bounded contexts** — Write logic lives in `billing` / `messaging` / `campaigns`; read shaping in `reporting`. Separate `cmd/` binaries match that.
 
@@ -94,12 +96,13 @@ flowchart LR
     NormalWorkers -->|"dispatch result"| Results{{"sms.dispatch-results"}}
     ExpressWorkers -->|"dispatch result or expired_sla_missed"| Results
     Results --> ReportSink["Report Sink Consumer (Inbox dedup)"]
-    Results --> Billing["Billing / Ledger Consumer (Inbox dedup)"]
-    ReportSink --> ClickHouse[("ClickHouse: message_events log")]
-    ReportSink --> Postgres[("Postgres: accounts, ledger_entries, messages, campaigns, history")]
+    Results --> Billing["Billing Consumer (Inbox dedup)"]
+    ReportSink --> ClickHouse[("ClickHouse: message_events, credit_events")]
+    ReportSink --> Postgres[("Postgres: accounts, messages, campaigns, history")]
     Billing --> Postgres
+    Billing --> ClickHouse
     Billing -.->|"refund on failure or SLA-miss"| Redis
-    Reconciler["Reconciliation Job (safety net)"] -.->|"compare, alert, safe-direction heal"| Redis
+    Reconciler["Reconciliation Job (safety net)"] -.->|"heal live down to durable"| Redis
     Reconciler -.-> Postgres
     ReportingAPI["Reporting API"] --> ClickHouse
     ReportingAPI --> Postgres
@@ -130,7 +133,7 @@ Because both happen atomically, it is impossible to decrement the balance withou
 - Among Redis data structures, a **Stream** (not a List/Set) gives an outbox relay exactly the semantics it needs natively: consumer groups, per-entry `XACK`, and `XAUTOCLAIM`/`XCLAIM` to reclaim entries from a crashed consumer - a List would require hand-rolling all of that.
 - It's a deliberately short-lived staging buffer, not a Kafka replacement - Kafka remains the backbone for throughput/retention/fan-out at 100M/day scale.
 
-`cmd/outbox-relay` consumes `outbox:messages` (and `outbox:campaigns`) via a Redis Streams consumer group, publishes to the right Kafka topic with an idempotent producer, and only `XACK`s after Kafka confirms. A crash-and-retry can cause a duplicate publish - safe, because every downstream consumer is idempotent (Inbox, below). The billing consumer subscribes to this same accepted-event stream, so the durable ledger debit entry is *guaranteed* to eventually exist.
+`cmd/outbox-relay` consumes `outbox:messages` (and `outbox:campaigns`) via a Redis Streams consumer group, publishes to the right Kafka topic with an idempotent producer, and only `XACK`s after Kafka confirms. A crash-and-retry can cause a duplicate publish - safe, because every downstream consumer is idempotent (Inbox, below). The billing consumer subscribes to this same accepted-event stream, so the durable debit is *guaranteed* to eventually exist.
 
 ### 5.2 Inbox (read side)
 
@@ -139,25 +142,25 @@ Kafka is at-least-once, so every consumer (`dispatcher`, `report-sink`, `billing
 **Ordering rules (crash-safe):**
 
 - **Dispatcher:** call the operator **outside** any Postgres TX; short TX for Inbox + message rows; publish `sms.dispatch-results` after commit. If Inbox already shows processed (commit succeeded, publish failed), **republish** the result from Postgres instead of no-opping.
-- **Billing refunds:** write ledger + Inbox, **commit**, then credit Redis. Never `INCR` Redis before Commit. On Inbox duplicate, `AlignRedisToLedger` repairs a missing credit. Partial unique indexes enforce one debit and one refund per `message_id`.
+- **Billing refunds:** Inbox + durable-balance Δ, **commit**, then credit live balance. Never increment live before Commit. On Inbox duplicate, do not apply a second money Δ; ensure the credit-log row, and align live to durable (this can raise live after a crash between durable refund and Redis `INCR`). Inbox is the only debit/refund idempotency.
 - **Report-sink:** Postgres status writes → ClickHouse ensure-insert → Inbox mark (Inbox only after both stores succeed). ClickHouse uses `ReplacingMergeTree` + an exists-check for idempotent retries.
 - **Accept idempotency:** `Idempotency-Key` is reserved inside the Redis Lua debit script (not a separate GET/SET race).
 - **DLQ:** consumers use bounded retries (`ConsumeLoopWithStore`, Redis-backed attempt counters) then publish to `sms.dlq`.
 
 ### 5.3 What reconciliation is for
 
-`cmd/reconciler` runs periodically to **detect and alert**, only auto-healing in the safe direction:
+`cmd/reconciler` runs periodically and calls `Heal` (seed + down-heal). It is a safety net, never the primary sync mechanism:
 
-- Redis balance **higher** than `SUM(ledger_entries)` -> auto-correct down immediately + page (dangerous "free credit" direction).
-- Redis balance **lower** than the ledger sum -> alert only, don't blindly increase (expected-lag direction; blind auto-heal could mask a real bug).
-- On a cold Redis start, the only legitimate way to seed `balance:{account_id}` is `SUM(ledger_entries)` from Postgres - Postgres is the ultimate source of truth for balance.
+- Live balance **higher** than durable → set live down immediately (dangerous "free credit" direction). Heal never grants credit.
+- Live balance **lower** than durable on a **present** key → leave live alone (expected lag from async durable catch-up). Blind auto-heal up could invent spendable credit. Inbox-hit refund is a separate path: it may align live **to** durable after a crash between durable refund and Redis `INCR`.
+- **Seed:** copy durable → live only if the Redis key is **absent**. Never overwrite a present live key with a higher durable value.
 - Redis runs with AOF persistence (`appendfsync everysec` minimum) so a normal restart doesn't even trigger this path.
 
 ## 6. Event history & auditability
 
 Every important entity has a current-state table **and** a companion append-only history (a lightweight audit-trail style, not strict event sourcing):
 
-- **Balance/credit:** `ledger_entries` (topup/debit/refund, immutable) is inherently event-sourced; `accounts.balance` is a denormalized cache updated in the same transaction as each ledger insert.
+- **Balance/credit:** durable balance is the mutated `accounts.balance` column (never a cache of a SUM). Credit history is ClickHouse `credit_events` (append-only topup/debit/refund); nothing heals, seeds, or spends by summing it.
 - **Message lifecycle:** `messages` holds current status; `message_status_events` (Postgres, append-only) records every transition. The same lifecycle events flow into ClickHouse `message_events` for large-scale analytics.
 - **Campaigns:** `campaigns` holds current aggregate status; per-recipient `messages` rows carry their own history; campaign aggregates are computed on read.
 - **Outbox entries** are themselves an event log of every accepted send/debit.
@@ -176,12 +179,12 @@ Delivering an Express message after its usefulness window (e.g. an OTP) is worse
 
 ## 8. Component breakdown
 
-- **API Gateway** (`cmd/api-gateway`): REST entry point. Resolves `account_id` from the API key only (never client input). Runs the Lua accept script for `/v1/messages` and `/v1/campaigns`. Per-tenant token-bucket rate limiting at ingestion (independent of balance).
+- **API Gateway** (`cmd/api-gateway`): REST entry point. Resolves `account_id` from the API key only (never client input). Runs the Lua accept script for `/v1/messages` and `/v1/campaigns`. Topup requires `Idempotency-Key`, mutates durable balance, credits live, then appends a credit-log row. Per-tenant token-bucket rate limiting at ingestion (independent of balance).
 - **Outbox Relay** (`cmd/outbox-relay`): drains Redis outbox streams into Kafka reliably.
 - **Dispatcher** (`cmd/dispatcher --mode=normal|express`): Inbox-dedup, calls the Operator Adapter, retries with backoff, enforces the Express deadline.
 - **Report Sink** (`cmd/report-sink`): Inbox-dedup, updates `messages`/`message_status_events` (Postgres) and `message_events` (ClickHouse).
-- **Billing / Ledger Consumer** (`cmd/billing-consumer`): Inbox-dedup, writes ledger debit/refund entries.
-- **Reconciler** (`cmd/reconciler`): safety-net drift detection/alerting (section 5.3).
+- **Billing Consumer** (`cmd/billing-consumer`): calls `ApplyDebit` / `ApplyRefund` (Inbox + durable Δ inside billing; then credit-log append). Refunds credit live only after durable commit.
+- **Reconciler** (`cmd/reconciler`): safety-net `Heal` — seed absent live keys; set live down when live > durable (section 5.3).
 - **Campaign Expander** (`cmd/campaign-expander`): fans an accepted campaign out into individual messages (section 9).
 - **Reporting API** (`cmd/reporting-api`): serves `/v1/messages/{id}`, `/v1/reports`, `/v1/campaigns/*`.
 - **Operator Mock** (`cmd/operator-mock`): simulates a telecom operator (latency + configurable failure rate) - there is no real operator integration in this build.
@@ -227,8 +230,8 @@ Recipient phone numbers (`to`) accept both E.164 (`+989121234567`) and local Ira
 | Method & path | Auth | Notes |
 |---|---|---|
 | `POST /v1/accounts` | none (open, rate-limited) | `{ name }` -> `{ accountId, apiKey }` |
-| `POST /v1/topups` | API key | `{ amount }` -> `{ balance }` |
-| `GET /v1/balance` | API key | -> `{ balance }` |
+| `POST /v1/topups` | API key + `Idempotency-Key` | `{ amount }` -> `{ balance }` (durable + live; replay returns stored durable balance) |
+| `GET /v1/balance` | API key | -> `{ balance }` (live balance) |
 | `POST /v1/messages` | API key + `Idempotency-Key` | `{ to, text, priority }` -> `{ messageId, status, cost }`; `priority`: `normal｜express` |
 | `GET /v1/messages/{id}` | API key | 404 if not found/not owned |
 | `POST /v1/campaigns` | API key + `Idempotency-Key` | `{ text, recipients: [...] }` -> `{ campaignId, totalRecipients, cost }` (always normal priority) |
@@ -243,8 +246,8 @@ See [`openapi/openapi.yaml`](openapi/openapi.yaml) for the full machine-readable
 
 **Postgres** (mutable business tables include `created_at`, `updated_at`; Inbox is append-only):
 
-- `accounts(id, api_key_hash, name, balance, created_at, updated_at)`
-- `ledger_entries(id, account_id, type[topup|debit|refund], amount, message_id nullable, created_at, updated_at)`
+- `accounts(id, api_key_hash, name, balance, created_at, updated_at)` — `balance` is durable balance, mutated in place
+- `topup_idempotency(account_id, idempotency_key, amount, durable_balance, created_at, updated_at)` — one successful topup per account+key; replay returns stored durable_balance
 - `campaigns(id, account_id, text, total_recipients, cost_per_message, total_cost, status, created_at, updated_at)`
 - `messages(id, account_id, campaign_id nullable, recipient, priority, cost, status, operator, deadline_at nullable, created_at, updated_at, dispatched_at)`
 - `message_status_events(id, message_id, status, occurred_at, created_at, updated_at)`
@@ -252,7 +255,9 @@ See [`openapi/openapi.yaml`](openapi/openapi.yaml) for the full machine-readable
 
 **Redis:** `balance:{account_id}`, `outbox:messages`, `outbox:campaigns`, `idem:{account_id}:{idempotency_key}`, `ratelimit:{account_id}`.
 
-**ClickHouse:** `message_events(event_time, message_id, account_id, campaign_id nullable, recipient, priority, status, cost, operator)` in database `sms_gateway`.
+**ClickHouse** (database `sms_gateway`):
+- `message_events(event_time, message_id, account_id, campaign_id nullable, recipient, priority, status, cost, operator)` — delivery reporting; not money
+- `credit_events(event_time, account_id, type[topup|debit|refund], amount, message_id nullable, idempotency_key nullable)` — credit log; never summed for a balance
 
 See [`db/migrations/`](db/migrations) for the executable schema and [`clickhouse/init/`](clickhouse/init) for the ClickHouse table definition.
 
@@ -267,7 +272,7 @@ See [`db/migrations/`](db/migrations) for the executable schema and [`clickhouse
 
 ## 13. Cross-cutting concerns
 
-- **Idempotency:** `Idempotency-Key` header on `/v1/messages` and `/v1/campaigns`, deduped via Redis; internal Inbox tables for consumer-side dedup.
+- **Idempotency:** `Idempotency-Key` header on `/v1/messages` and `/v1/campaigns` (Redis, inside the Lua debit); on `/v1/topups` (Postgres `topup_idempotency` in the same TX as the durable increase). Inbox (`processed_events`) for consumer-side debit/refund/dispatch dedup.
 - **Retries/DLQ:** exponential backoff in dispatchers; `sms.dlq` for exhausted retries.
 - **Observability:** Prometheus business + pipeline metrics on api-gateway and workers (`METRICS_ADDR`); Express SLA / dispatch latency histograms; logs include service-level context (correlation by `message_id`/`campaign_id` where handlers emit it).
 - **Multi-operator routing:** pluggable `OperatorAdapter` interface + simple `Router`; one mock operator for the core build.

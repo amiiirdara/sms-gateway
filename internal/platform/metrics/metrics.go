@@ -93,19 +93,19 @@ var (
 		Help: "Express messages dropped for hard SLA deadline (expired_sla_missed)",
 	})
 
-	LedgerDebits = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "sms_ledger_debits_total",
-		Help: "Durable ledger debit rows written by billing-consumer",
+	DurableDebits = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sms_durable_debits_total",
+		Help: "Durable-balance debits applied by billing-consumer",
 	}, []string{"priority"})
 
-	LedgerRefunds = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "sms_ledger_refunds_total",
-		Help: "Durable ledger refund rows written by billing-consumer",
+	DurableRefunds = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sms_durable_refunds_total",
+		Help: "Durable-balance refunds applied by billing-consumer",
 	}, []string{"reason"}) // failed|expired_sla_missed
 
 	CreditsRefunded = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "sms_credits_refunded_total",
-		Help: "Credits returned to Redis/ledger on failure or SLA miss",
+		Help: "Credits returned to live balance on failure or SLA miss",
 	}, []string{"reason"})
 
 	ReportEvents = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -115,12 +115,12 @@ var (
 
 	ReconcilerDrift = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "sms_reconciler_drift_total",
-		Help: "Accounts where Redis balance diverged from ledger sum",
-	}, []string{"direction"}) // redis_gt_ledger|redis_lt_ledger
+		Help: "Accounts where live balance diverged from durable balance",
+	}, []string{"direction"}) // live_gt_durable|live_lt_durable
 
 	ReconcilerHeals = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "sms_reconciler_heals_total",
-		Help: "Auto-heals applied (Redis > ledger only; Redis set down to ledger)",
+		Help: "Auto-heals applied (live > durable only; live set down to durable)",
 	})
 
 	RateLimited = promauto.NewCounterVec(prometheus.CounterOpts{

@@ -4,7 +4,7 @@ Orientation for any agent (or human) working on this repo cold.
 
 ## What this is
 
-A multi-tenant SMS Gateway (send SMS, manage prepaid credit, batch "campaign" sends, delivery reports) built in Go. Brief whole-project map: [docs/project-report.md](docs/project-report.md). Full design rationale lives in [ARCHITECTURE.md](ARCHITECTURE.md) - read it before making non-trivial changes, especially before touching balance/billing logic, the Outbox/Inbox pipeline, or the Express SLA path.
+A multi-tenant SMS Gateway (send SMS, manage prepaid credit, batch "campaign" sends, delivery reports) built in Go. Brief whole-project map: [docs/project-report.md](docs/project-report.md). Domain language: [CONTEXT.md](CONTEXT.md). Full design rationale lives in [ARCHITECTURE.md](ARCHITECTURE.md) — read it before making non-trivial changes, especially before touching balance/billing logic, the Outbox/Inbox pipeline, or the Express SLA path.
 
 ## Repo layout
 
@@ -26,14 +26,15 @@ clickhouse/init/     ClickHouse table DDL
 openapi/openapi.yaml REST API contract
 scripts/             smoke-edge.ps1, load-accept.js (k6), run-scenario-suite.ps1,
                      generate-scenario-charts.py
-docs/                Reviewer guide, metrics, security, trade-offs, load + scenario reports
+docs/                Reviewer guide, metrics, security, trade-offs, load + scenario reports, ADRs
+CONTEXT.md           Domain language (live / durable / credit log)
 ```
 
 Dependencies point inward: `cmd` -> `domain` -> `platform`. `domain` packages must not import each other directly across bounded contexts (e.g. `messaging` must not reach into `billing`'s internals) - communicate through Kafka events or well-defined interfaces instead.
 
 ## Before you implement
 
-1. Read [ARCHITECTURE.md](ARCHITECTURE.md) for the relevant section.
+1. Read [CONTEXT.md](CONTEXT.md) for prepaid-credit vocabulary, then [ARCHITECTURE.md](ARCHITECTURE.md) for the relevant section.
 2. Check `.cursor/rules/` - they encode the non-negotiable conventions for this repo (clean code/SOLID, project layout, query performance, Kafka consumer conventions, tenant-isolation security, testing standards). They apply automatically; read them if you want the full rationale.
 3. For repeatable multi-step tasks, use the skills in `.cursor/skills/`: `add-kafka-consumer` when adding a new Kafka consumer service, `add-db-query` when adding a new migration + query.
 
@@ -50,4 +51,6 @@ Dependencies point inward: `cmd` -> `domain` -> `platform`. `domain` packages mu
 - Every Kafka consumer must be idempotent via the Inbox pattern before any side effect.
 - Every mutable Postgres business table has `created_at`/`updated_at`. Append-only inbox table `processed_events` has `created_at` (+ `processed_at`) only.
 - No GORM, no `SELECT *`, no N+1 queries - `sqlc`-generated queries only.
-- Balance changes only ever happen through the atomic Redis Lua script described in ARCHITECTURE.md section 5 - never a plain `GET` then `SET`.
+- Live balance changes only through the atomic Redis Lua script described in ARCHITECTURE.md section 5 — never a plain `GET` then `SET`.
+- Durable balance is mutated `accounts.balance` in billing (`ApplyDebit` / `ApplyRefund` / `TopUp`). Never SUM a credit log (Postgres or ClickHouse) to produce a balance.
+- Heal sets live **down** to durable when live is higher. Seed copies durable → live only if the Redis key is **absent**. Never auto-heal live up on a present key.

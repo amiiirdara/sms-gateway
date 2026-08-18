@@ -34,9 +34,9 @@ Verification aid for reviewers. These behaviors are implemented in code; this do
 | Atomic check-and-decrement (Lua), never plain GET then SET | Yes | Redis Lua accept scripts |
 | Spend to exact zero allowed; never negative | Yes | Lua + unit/integration tests |
 | Campaign all-or-nothing reserve | Yes | campaigns accept |
-| Ledger debits/refunds durable + Inbox-deduped | Yes | billing-consumer |
+| Durable debit/refund + Inbox-deduped | Yes | billing-consumer (`ApplyDebit` / `ApplyRefund`) |
 | Refund on `failed` / `expired_sla_missed` | Yes | billing-consumer |
-| Reconciler auto-heals **only** Redis > ledger | Yes | reconciler (never invents free credit the other way) |
+| Reconciler auto-heals **only** live > durable | Yes | reconciler (`Heal`: never grants credit the other way) |
 
 ## Reliability (Outbox / Inbox)
 

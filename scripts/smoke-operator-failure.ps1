@@ -34,7 +34,7 @@ try {
   $acc = Invoke-RestMethod -Method Post -Uri "$Base/v1/accounts" -ContentType "application/json" `
     -Body (@{ name = "fail-inject-$(Get-Random)" } | ConvertTo-Json)
   $H = @{ Authorization = "Bearer $($acc.apiKey)"; "Content-Type" = "application/json" }
-  Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $H -Body '{"amount":1}' | Out-Null
+  Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($H + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":1}' | Out-Null
   $msg = Invoke-RestMethod -Method Post -Uri "$Base/v1/messages" -Headers $H `
     -Body '{"to":"09129998877","text":"expect-fail","priority":"normal"}'
   if ($msg.status -ne "accepted") { throw "expected accepted, got $($msg.status)" }

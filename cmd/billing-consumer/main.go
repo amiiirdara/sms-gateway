@@ -129,7 +129,7 @@ func applyDebit(ctx context.Context, billingSvc *billing.Service, consumerName s
 		priority = messaging.PriorityNormal
 	}
 	metrics.InboxProcessed.WithLabelValues(consumerName).Inc()
-	metrics.LedgerDebits.WithLabelValues(priority).Inc()
+	metrics.DurableDebits.WithLabelValues(priority).Inc()
 	return nil
 }
 
@@ -146,7 +146,7 @@ func applyRefund(ctx context.Context, billingSvc *billing.Service, ev messaging.
 		return err
 	}
 	metrics.InboxProcessed.WithLabelValues("billing-refund").Inc()
-	metrics.LedgerRefunds.WithLabelValues(ev.Status).Inc()
+	metrics.DurableRefunds.WithLabelValues(ev.Status).Inc()
 	metrics.CreditsRefunded.WithLabelValues(ev.Status).Add(float64(ev.Cost))
 	return nil
 }

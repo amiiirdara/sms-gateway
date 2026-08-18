@@ -50,6 +50,7 @@ export function setup() {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
+        'Idempotency-Key': `k6-topup-${Date.now()}`,
       },
     },
   );

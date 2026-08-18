@@ -32,11 +32,13 @@ More: [ARCHITECTURE.md §1–2](../ARCHITECTURE.md) · [trade-offs.md](trade-off
 | Layer               | Choice                      | Role                                      |
 | ------------------- | --------------------------- | ----------------------------------------- |
 | Language            | Go                          | Services under `cmd/`                     |
-| Hot-path balance    | Redis + Lua                 | Atomic debit + outbox in one script       |
-| Staging outbox      | Redis Streams               | Bridge accept → Kafka without dual-write  |
-| Event backbone      | Kafka                       | Dispatch, billing, reporting fan-out, DLQ |
-| System of record    | PostgreSQL (`pgx` + `sqlc`) | Accounts, ledger, messages, Inbox         |
-| Analytics / reports | ClickHouse                  | High-ingest `message_events`              |
+| Hot-path / live balance | Redis + Lua                 | Atomic debit + outbox in one script       |
+| Staging outbox          | Redis Streams               | Bridge accept → Kafka without dual-write  |
+| Durable balance         | PostgreSQL (`accounts.balance`) | Mutated column; never a SUM of a log   |
+| Credit log              | ClickHouse `credit_events`  | Append-only history; never summed         |
+| Event backbone          | Kafka                       | Dispatch, billing, reporting fan-out, DLQ |
+| System of record        | PostgreSQL (`pgx` + `sqlc`) | Accounts, durable balance, messages, Inbox |
+| Analytics / reports     | ClickHouse                  | High-ingest `message_events`              |
 | Operator            | HTTP mock                   | Pluggable adapters; no real carrier       |
 
 
@@ -54,13 +56,13 @@ Client
   → outbox-relay         (Redis Stream → Kafka)
   → dispatcher           (operator call; Express deadline)
   → sms.dispatch-results
-       ├→ billing-consumer   (ledger debit/refund; Redis credit on fail)
+       ├→ billing-consumer   (durable debit/refund; live credit on fail)
        └→ report-sink        (Postgres status + ClickHouse event)
 Client
   → reporting-api        (status / reports by API key)
 ```
 
-Campaigns add `campaign-expander` between accept and per-recipient outbound publish. `reconciler` periodically compares Redis vs ledger (safety net only).
+Campaigns add `campaign-expander` between accept and per-recipient outbound publish. `reconciler` periodically heals live > durable (safety net only).
 
 More: [ARCHITECTURE.md §4–5, §8–9](../ARCHITECTURE.md)
 
@@ -77,10 +79,10 @@ More: [ARCHITECTURE.md §4–5, §8–9](../ARCHITECTURE.md)
 | `outbox-relay`      | Drain Redis outbox → Kafka; ACK only after publish     |
 | `campaign-expander` | Fan campaign into per-recipient messages (cursor-safe) |
 | `dispatcher`        | `--mode=normal|express` → operator; Inbox + results    |
-| `billing-consumer`  | Durable ledger debit/refund; refund → Redis            |
+| `billing-consumer`  | Durable debit/refund; refund → live after commit       |
 | `report-sink`       | Message status in PG + events in ClickHouse            |
 | `reporting-api`     | `GET` status, paginated reports, campaign aggregates   |
-| `reconciler`        | Drift detect; auto-heal only Redis > ledger            |
+| `reconciler`        | Heal: seed absent live; auto-heal only live > durable  |
 | `operator-mock`     | Fake carrier (latency + admin failure-rate)            |
 
 
@@ -101,7 +103,7 @@ Layout rules: [AGENTS.md](../AGENTS.md) · `cmd` → `domain` → `platform`.
 **Ordering highlights:**
 
 - Dispatcher: operator **outside** TX; commit then publish results; Inbox hit → **republish** from DB.
-- Refunds: ledger+Inbox commit **then** Redis credit; duplicates → `AlignRedisToLedger`.
+- Refunds: Inbox + durable Δ, commit **then** live credit; duplicates align live to durable.
 - Report-sink: PG → ClickHouse ensure → Inbox mark.
 - Retries: Redis-backed attempt counters → `sms.dlq` after max attempts.
 
@@ -114,8 +116,9 @@ More: [ARCHITECTURE.md §5](../ARCHITECTURE.md)
 ## 6. Billing & prepaid credit
 
 - Flat **1 credit / message**; spend to **exact zero** allowed; never negative.
-- Hot path: Redis Lua only (never GET-then-SET).
-- Durable truth: Postgres `ledger_entries` (topup / debit / refund).
+- Live balance: Redis Lua only (never GET-then-SET).
+- Durable balance: mutated `accounts.balance` (topup / debit / refund); never a SUM.
+- Credit log: ClickHouse `credit_events` (append-only; never summed for money).
 - Failures and Express SLA misses → automatic refund.
 - Campaigns: **all-or-nothing** reserve for the whole recipient list.
 
@@ -172,8 +175,8 @@ Checklist with code pointers: [security-ops-checklist.md](security-ops-checklist
 | Store      | Holds                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------------- |
 | Redis      | `balance:{id}`, outbox streams, idempotency keys, rate-limit buckets, Kafka attempt counters |
-| Postgres   | accounts, ledger, messages, status events, campaigns, `processed_events` (Inbox)             |
-| ClickHouse | `message_events` (`ReplacingMergeTree`) for reports                                          |
+| Postgres   | accounts (durable balance), messages, status events, campaigns, `processed_events` (Inbox), `topup_idempotency` |
+| ClickHouse | `message_events` (reports) + `credit_events` (credit log; never summed) |
 | Kafka      | `sms.outbound.{normal,express}`, `sms.dispatch-results`, `sms.dlq`                           |
 
 

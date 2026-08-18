@@ -64,7 +64,7 @@ Suite-level deltas on api-gateway `sms_*` counters (baseline scrape → final sc
 Notes:
 
 - Topups cover per-scenario account funding (10+5+10+0+1+5+50 ≈ 81).
-- Single-message spends include S1 + S7 (1 + 20); express spend is counted separately in worker ledger metrics.
+- Single-message spends include S1 + S7 (1 + 20); express spend is counted separately in worker durable-debit metrics.
 - Reject paths (S4/S5/S6) do not decrement balance.
 
 ## Scenario detail
@@ -164,6 +164,8 @@ After the suite, workers were scraped once. Counts below are **process-lifetime*
 | campaign-expander | `sms_campaign_messages_expanded_total` | 6 |
 | report-sink | `sms_report_events_total{status="sent"}` | 20 |
 | report-sink | `sms_inbox_processed_total{consumer="report-sink"}` | 20 |
+
+Those billing-consumer names were later renamed to `sms_durable_debits_total` / `sms_durable_refunds_total` (see [metrics.md](metrics.md)). The table above is the recorded scrape; do not treat the old names as current.
 
 Interpretation for this run:
 

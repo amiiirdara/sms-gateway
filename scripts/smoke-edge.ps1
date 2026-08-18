@@ -24,7 +24,7 @@ try {
 Write-Host "== campaign all-or-nothing =="
 $acc2 = New-Account "edge-camp"
 $H2 = @{ Authorization = "Bearer $($acc2.apiKey)"; "Content-Type" = "application/json" }
-Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H2 -Body '{"amount":1}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers ($H2 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":1}' | Out-Null
 try {
   Invoke-RestMethod -Method Post -Uri "$base/v1/campaigns" -Headers $H2 `
     -Body '{"text":"promo","recipients":["09121111111","09122222222"]}'
@@ -42,7 +42,7 @@ Write-Host "OK: balance unchanged at 1"
 Write-Host "== exact-zero spend =="
 $acc3 = New-Account "edge-zero"
 $H3 = @{ Authorization = "Bearer $($acc3.apiKey)"; "Content-Type" = "application/json" }
-Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H3 -Body '{"amount":1}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers ($H3 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":1}' | Out-Null
 $msg = Invoke-RestMethod -Method Post -Uri "$base/v1/messages" -Headers $H3 `
   -Body '{"to":"+989121234567","text":"last-credit","priority":"normal"}'
 if ($msg.status -ne "accepted") { throw "expected accepted" }

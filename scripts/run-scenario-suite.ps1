@@ -86,7 +86,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc1 = New-Account "scen-normal-$(Get-Random)"
 $h1 = AuthHeaders $acc1.apiKey
-$top1 = Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h1 -Body '{"amount":10}'
+$top1 = Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h1 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":10}'
 $msg1 = Invoke-RestMethod -Method Post -Uri "$Base/v1/messages" -Headers $h1 -Body '{"to":"09121111111","text":"s1-normal","priority":"normal"}'
 $final1 = Wait-MessageStatus $h1 $msg1.messageId
 $bal1 = Invoke-RestMethod -Method Get -Uri "$Base/v1/balance" -Headers $h1
@@ -125,7 +125,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc2 = New-Account "scen-express-$(Get-Random)"
 $h2 = AuthHeaders $acc2.apiKey
-Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h2 -Body '{"amount":5}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h2 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":5}' | Out-Null
 $msg2 = Invoke-RestMethod -Method Post -Uri "$Base/v1/messages" -Headers $h2 -Body '{"to":"+989122222222","text":"s2-otp","priority":"express"}'
 $final2 = Wait-MessageStatus $h2 $msg2.messageId
 $bal2 = Invoke-RestMethod -Method Get -Uri "$Base/v1/balance" -Headers $h2
@@ -158,7 +158,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc3 = New-Account "scen-camp-$(Get-Random)"
 $h3 = AuthHeaders $acc3.apiKey
-Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h3 -Body '{"amount":10}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h3 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":10}' | Out-Null
 $camp = Invoke-RestMethod -Method Post -Uri "$Base/v1/campaigns" -Headers $h3 -Body (@{
   text = "s3-promo"
   recipients = @("09121110001","09121110002","09121110003")
@@ -232,7 +232,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc5 = New-Account "scen-aon-$(Get-Random)"
 $h5 = AuthHeaders $acc5.apiKey
-Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h5 -Body '{"amount":1}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h5 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":1}' | Out-Null
 $code5 = $null
 $body5 = $null
 try {
@@ -268,7 +268,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc6 = New-Account "scen-val-$(Get-Random)"
 $h6 = AuthHeaders $acc6.apiKey
-Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h6 -Body '{"amount":5}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h6 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":5}' | Out-Null
 $code6 = $null
 $body6 = $null
 try {
@@ -300,7 +300,7 @@ $m0 = Get-MetricsMap
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $acc7 = New-Account "scen-burst-$(Get-Random)"
 $h7 = AuthHeaders $acc7.apiKey
-Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers $h7 -Body '{"amount":50}' | Out-Null
+Invoke-RestMethod -Method Post -Uri "$Base/v1/topups" -Headers ($h7 + @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }) -Body '{"amount":50}' | Out-Null
 $ok7 = 0
 $latencies = @()
 for ($i = 0; $i -lt 20; $i++) {

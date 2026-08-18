@@ -199,7 +199,7 @@ func (s *Service) ApplyRefund(ctx context.Context, accountID, messageID uuid.UUI
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := s.recordRefundLedger(ctx, qtx, accountID, messageID, cost); err != nil {
+	if err := s.applyDurableRefund(ctx, qtx, accountID, messageID, cost); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -254,7 +254,7 @@ func (s *Service) recordDebit(ctx context.Context, q *sqlc.Queries, accountID, m
 	return err
 }
 
-func (s *Service) recordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
+func (s *Service) applyDurableRefund(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	_, err := q.AddAccountBalance(ctx, sqlc.AddAccountBalanceParams{
 		ID:      accountID,
 		Balance: amount,

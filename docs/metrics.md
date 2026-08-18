@@ -38,11 +38,11 @@ These answer product questions: volume, revenue/credit flow, SLA misses, campaig
 | `sms_topups_total` | counter | — | Successful top-ups | api-gateway |
 | `sms_topup_credits_total` | counter | — | Sum of credits added | api-gateway |
 | `sms_credits_spent_total` | counter | `priority`, `source` (`single`\|`campaign`) | Credits reserved at accept | api-gateway |
-| `sms_credits_refunded_total` | counter | `reason` (`failed`\|`expired_sla_missed`) | Credits returned after failure/SLA miss | billing-consumer |
-| `sms_ledger_debits_total` | counter | `priority` | Durable ledger debit rows written | billing-consumer |
-| `sms_ledger_refunds_total` | counter | `reason` | Durable ledger refund rows written | billing-consumer |
+| `sms_credits_refunded_total` | counter | `reason` (`failed`\|`expired_sla_missed`) | Credits returned to live balance after failure/SLA miss | billing-consumer |
+| `sms_durable_debits_total` | counter | `priority` | Durable-balance debits applied | billing-consumer |
+| `sms_durable_refunds_total` | counter | `reason` | Durable-balance refunds applied | billing-consumer |
 
-**How to use:** `rate(sms_credits_spent_total[5m])` ≈ accept TPS in credits. Compare spent vs refunded for net credit burn. Ledger counters lag Redis hot-path slightly (async consumer).
+**How to use:** `rate(sms_credits_spent_total[5m])` ≈ accept TPS in credits. Compare spent vs refunded for net credit burn. Durable debit/refund counters lag live spend slightly (async billing-consumer).
 
 ### Message accept (ingestion)
 
@@ -90,10 +90,10 @@ These answer product questions: volume, revenue/credit flow, SLA misses, campaig
 
 | Metric | Type | Labels | Meaning | Emitted by |
 |---|---|---|---|---|
-| `sms_reconciler_drift_total` | counter | `direction` (`redis_gt_ledger`\|`redis_lt_ledger`) | Detected Redis↔ledger divergence | reconciler |
-| `sms_reconciler_heals_total` | counter | — | Auto-heals (Redis > ledger only) | reconciler |
+| `sms_reconciler_drift_total` | counter | `direction` (`live_gt_durable`\|`live_lt_durable`) | Detected live↔durable divergence | reconciler |
+| `sms_reconciler_heals_total` | counter | — | Auto-heals (live > durable only) | reconciler |
 
-**How to use:** Any sustained `redis_gt_ledger` is a pager-worthy free-credit risk (healed automatically). `redis_lt_ledger` is usually expected lag from async ledger writes—alert on growth, don't auto-heal.
+**How to use:** Any sustained `live_gt_durable` is a pager-worthy free-credit risk (healed automatically). `live_lt_durable` is usually expected lag from async durable catch-up — alert on growth, don't auto-heal live up.
 
 ---
 

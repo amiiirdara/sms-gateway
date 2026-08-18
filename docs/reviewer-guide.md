@@ -45,6 +45,7 @@ $base = 'http://localhost:8080'   # or http://[::1]:8080
 $acc = Invoke-RestMethod -Method Post -Uri "$base/v1/accounts" `
   -ContentType application/json -Body '{"name":"reviewer"}'
 $H = @{ Authorization = "Bearer $($acc.apiKey)"; "Content-Type" = "application/json" }
+$H["Idempotency-Key"] = [guid]::NewGuid().ToString()
 Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H -Body '{"amount":10}'
 $msg = Invoke-RestMethod -Method Post -Uri "$base/v1/messages" -Headers $H `
   -Body '{"to":"09121234567","text":"hello","priority":"normal"}'

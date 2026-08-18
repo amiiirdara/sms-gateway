@@ -17,6 +17,8 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 | [docs/project-report.md](docs/project-report.md) | **Full project report** — brief tour of everything, with links into deeper docs |
 | [docs/reviewer-guide.md](docs/reviewer-guide.md) | **Start here (demo)** — submission blurb, Compose up, smoke, edge script, k6 (~5 min) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full system design: Outbox/Inbox, Express SLA, campaigns, data model, API surface |
+| [CONTEXT.md](CONTEXT.md) | Domain language: live balance, durable balance, credit log, heal, seed |
+| [docs/adr/0001-durable-balance-and-clickhouse-credit-log.md](docs/adr/0001-durable-balance-and-clickhouse-credit-log.md) | Why durable balance is Postgres and the credit log is ClickHouse |
 | [docs/architecture.svg](docs/architecture.svg) · [docs/architecture.png](docs/architecture.png) | One-page visual of the accept → Kafka → dispatch / billing / reports flow |
 | [openapi/openapi.yaml](openapi/openapi.yaml) | REST API contract (paths, auth, request/response schemas) |
 | [docs/metrics.md](docs/metrics.md) | Prometheus catalog — business + technical metrics ([code](internal/platform/metrics/metrics.go)) |
@@ -33,11 +35,12 @@ Designed for ~100M messages/day with highly skewed per-tenant traffic. Built in 
 ## What is implemented
 
 - Account create (open, rate-limited) + API-key tenant isolation
-- Prepaid balance with atomic Redis Lua check-and-decrement (spend to exact zero, never negative)
+- Prepaid live balance with atomic Redis Lua check-and-decrement (spend to exact zero, never negative)
+- Durable balance in Postgres (`accounts.balance`); credit log in ClickHouse (`credit_events`)
 - Redis Streams outbox → Kafka relay (no dual-write loss between debit and dispatch)
 - Normal + Express dispatch lanes; Express hard deadline (2 min) drops late messages and refunds
-- Campaigns (normal priority only, all-or-nothing balance reservation, up to 10k recipients)
-- Ledger + Inbox idempotency; reconciler safety net (auto-heal only Redis > ledger)
+- Campaigns (normal priority only, all-or-nothing live reservation, up to 10k recipients)
+- Inbox idempotency for debit/refund; reconciler safety net (heal only live > durable)
 - Reporting API: message status, paginated reports, campaign aggregates (ClickHouse)
 - Operator mock + pluggable multi-operator routing; Docker Compose local stack
 - Prometheus metrics at `GET /metrics` (api-gateway `:8080`; workers `METRICS_ADDR`, default `:9090`) — catalog in [docs/metrics.md](docs/metrics.md)
@@ -68,7 +71,8 @@ $acc = Invoke-RestMethod -Method Post -Uri "$base/v1/accounts" `
   -ContentType application/json -Body '{"name":"demo"}'
 $H = @{ Authorization = "Bearer $($acc.apiKey)"; "Content-Type" = "application/json" }
 
-# 2. Top up
+# 2. Top up (Idempotency-Key required)
+$H["Idempotency-Key"] = [guid]::NewGuid().ToString()
 Invoke-RestMethod -Method Post -Uri "$base/v1/topups" -Headers $H -Body '{"amount":100}'
 
 # 3. Send a normal SMS (E.164 or local Iranian mobile)
@@ -117,10 +121,10 @@ Key reliability choices (details in [ARCHITECTURE.md](ARCHITECTURE.md)):
 | `outbox-relay` | Redis outbox → Kafka |
 | `campaign-expander` | Campaign → per-recipient messages |
 | `dispatcher` | `--mode=normal\|express` → operator |
-| `billing-consumer` | Ledger debit / refund |
+| `billing-consumer` | Durable debit / refund (then live credit) |
 | `report-sink` | Postgres status + ClickHouse events |
 | `reporting-api` | Status & reports |
-| `reconciler` | Redis ↔ ledger safety net |
+| `reconciler` | Heal live down to durable |
 | `operator-mock` | Simulated telecom API |
 
 ## Tests

@@ -173,21 +173,19 @@ func TestApplyRefundCreditsLiveAfterDurableCommit(t *testing.T) {
 	if err := st.rdb.SetBalance(ctx, acc.AccountID.String(), 4); err != nil {
 		t.Fatal(err)
 	}
-	q := st.svc.Queries()
-	if err := st.svc.RecordRefundLedger(ctx, q, acc.AccountID, msgID, 1); err != nil {
-		t.Fatal(err)
-	}
-	live, _ := st.rdb.GetBalance(ctx, acc.AccountID.String())
-	if live != 4 {
-		t.Fatalf("live should stay 4 until ApplyRefund credits, got %d", live)
-	}
-	// ApplyRefund Inbox+ledger will unique-hit the existing refund row, then credit live after commit.
 	if err := st.svc.ApplyRefund(ctx, acc.AccountID, msgID, 1); err != nil {
 		t.Fatal(err)
 	}
-	live, _ = st.rdb.GetBalance(ctx, acc.AccountID.String())
+	live, _ := st.rdb.GetBalance(ctx, acc.AccountID.String())
 	if live != 5 {
 		t.Fatalf("live after ApplyRefund want 5 got %d", live)
+	}
+	durable, err := st.svc.DurableBalance(ctx, acc.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durable != 5 {
+		t.Fatalf("durable after ApplyRefund want 5 got %d", durable)
 	}
 }
 
@@ -275,5 +273,26 @@ func TestTopUpCreditsDurableAndLive(t *testing.T) {
 	}
 	if durable != 3 {
 		t.Fatalf("durable=%d want 3", durable)
+	}
+}
+
+func TestHealSeedsAbsentLiveKey(t *testing.T) {
+	st, ctx := startBillingStack(t)
+	acc, err := st.svc.CreateAccount(ctx, "heal-seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 6, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.rdb.Raw().Del(ctx, platredis.BalanceKey(acc.AccountID.String())).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.svc.Heal(ctx, acc.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := st.svc.Balance(ctx, acc.AccountID)
+	if live != 6 {
+		t.Fatalf("heal seed: live=%d want 6", live)
 	}
 }

@@ -191,14 +191,10 @@ func (s *Service) ApplyRefund(ctx context.Context, accountID, messageID uuid.UUI
 	return s.creditLog.Append(ctx, entry)
 }
 
-// Heal sets live balance down to durable balance when live is higher. It never grants credit.
+// Heal seeds a missing live-balance key, then sets live down to durable when live is higher.
 func (s *Service) Heal(ctx context.Context, accountID uuid.UUID) error {
-	exists, err := s.rdb.HasBalance(ctx, accountID.String())
-	if err != nil {
+	if err := s.Seed(ctx, accountID); err != nil {
 		return err
-	}
-	if !exists {
-		return nil
 	}
 	durable, err := s.DurableBalance(ctx, accountID)
 	if err != nil {
@@ -230,11 +226,6 @@ func (s *Service) Seed(ctx context.Context, accountID uuid.UUID) error {
 	return s.rdb.SetBalance(ctx, accountID.String(), durable)
 }
 
-// RecordDebit writes a durable ledger debit. Kept for cmd until the consumer migration.
-func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
-	return s.recordDebit(ctx, q, accountID, messageID, amount)
-}
-
 func (s *Service) recordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	mid := messageID
 	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
@@ -255,11 +246,6 @@ func (s *Service) recordDebit(ctx context.Context, q *sqlc.Queries, accountID, m
 	}
 	_, err = q.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{ID: accountID, Balance: sum})
 	return err
-}
-
-// RecordRefundLedger writes a refund ledger entry. Kept for cmd until the consumer migration.
-func (s *Service) RecordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
-	return s.recordRefundLedger(ctx, q, accountID, messageID, amount)
 }
 
 func (s *Service) recordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
@@ -284,11 +270,6 @@ func (s *Service) recordRefundLedger(ctx context.Context, q *sqlc.Queries, accou
 	return err
 }
 
-// CreditRedisAfterRefund increments Redis after a committed ledger refund.
-func (s *Service) CreditRedisAfterRefund(ctx context.Context, accountID uuid.UUID, amount int64) error {
-	return s.creditRedisAfterRefund(ctx, accountID, amount)
-}
-
 func (s *Service) creditRedisAfterRefund(ctx context.Context, accountID uuid.UUID, amount int64) error {
 	if _, err := s.rdb.IncrBalance(ctx, accountID.String(), amount); err != nil {
 		_, alignErr := s.alignLiveToDurable(ctx, accountID)
@@ -299,19 +280,9 @@ func (s *Service) creditRedisAfterRefund(ctx context.Context, accountID uuid.UUI
 	return nil
 }
 
-// LedgerSum is DurableBalance. Kept for cmd until the consumer migration.
-func (s *Service) LedgerSum(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	return s.DurableBalance(ctx, accountID)
-}
-
 // ListAccountIDsPage returns account IDs after afterID (keyset), up to limit.
 func (s *Service) ListAccountIDsPage(ctx context.Context, afterID uuid.UUID, limit int32) ([]uuid.UUID, error) {
 	return s.q.ListAccountIDs(ctx, sqlc.ListAccountIDsParams{ID: afterID, Limit: limit})
-}
-
-// AlignRedisToLedger sets live balance from durable balance. Kept for cmd until the consumer migration.
-func (s *Service) AlignRedisToLedger(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	return s.alignLiveToDurable(ctx, accountID)
 }
 
 func (s *Service) alignLiveToDurable(ctx context.Context, accountID uuid.UUID) (int64, error) {

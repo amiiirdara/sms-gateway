@@ -1,4 +1,4 @@
-// Command billing-consumer records durable ledger debits and refunds.
+// Command billing-consumer records durable debits and refunds.
 package main
 
 import (
@@ -11,7 +11,6 @@ import (
 	"github.com/amiri/sms-gateway/internal/config"
 	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
-	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
 	"github.com/amiri/sms-gateway/internal/platform/metrics"
@@ -38,7 +37,6 @@ func main() {
 	defer rdb.Close()
 
 	billingSvc := billing.New(pool, rdb)
-	inboxStore := inbox.New(pool)
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 
@@ -56,26 +54,26 @@ func main() {
 	onErr := func(err error) { log.Printf("billing-consumer: %v", err) }
 	go platkafka.ConsumeLoopWithStore(ctx, normalR, dlqW, "billing-debit-normal", platkafka.DefaultMaxAttempts,
 		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-debit-normal"),
-		debitHandler(inboxStore, billingSvc, "billing-debit-normal"), onErr,
+		debitHandler(billingSvc, "billing-debit-normal"), onErr,
 	)
 	go platkafka.ConsumeLoopWithStore(ctx, expressR, dlqW, "billing-debit-express", platkafka.DefaultMaxAttempts,
 		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-debit-express"),
-		debitHandler(inboxStore, billingSvc, "billing-debit-express"), onErr,
+		debitHandler(billingSvc, "billing-debit-express"), onErr,
 	)
 	platkafka.ConsumeLoopWithStore(ctx, resultsR, dlqW, "billing-refund", platkafka.DefaultMaxAttempts,
 		platkafka.NewRedisAttemptStore(rdb.Raw(), "billing-refund"),
-		refundHandler(inboxStore, billingSvc), onErr,
+		refundHandler(billingSvc), onErr,
 	)
 	log.Println("billing-consumer: shutting down")
 }
 
-func debitHandler(inboxStore *inbox.Store, billingSvc *billing.Service, consumerName string) func(context.Context, kafkago.Message) (platkafka.HandleOutcome, error) {
+func debitHandler(billingSvc *billing.Service, consumerName string) func(context.Context, kafkago.Message) (platkafka.HandleOutcome, error) {
 	return func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
 		var ev messaging.AcceptedMessage
 		if err := json.Unmarshal(msg.Value, &ev); err != nil {
 			return platkafka.OutcomePoison, err
 		}
-		if err := recordDebit(ctx, inboxStore, billingSvc, consumerName, ev); err != nil {
+		if err := applyDebit(ctx, billingSvc, consumerName, ev); err != nil {
 			metrics.ConsumerHandleErrors.WithLabelValues(consumerName).Inc()
 			return platkafka.OutcomeRetry, err
 		}
@@ -83,7 +81,7 @@ func debitHandler(inboxStore *inbox.Store, billingSvc *billing.Service, consumer
 	}
 }
 
-func refundHandler(inboxStore *inbox.Store, billingSvc *billing.Service) func(context.Context, kafkago.Message) (platkafka.HandleOutcome, error) {
+func refundHandler(billingSvc *billing.Service) func(context.Context, kafkago.Message) (platkafka.HandleOutcome, error) {
 	return func(ctx context.Context, msg kafkago.Message) (platkafka.HandleOutcome, error) {
 		var ev messaging.DispatchResult
 		if err := json.Unmarshal(msg.Value, &ev); err != nil {
@@ -92,7 +90,7 @@ func refundHandler(inboxStore *inbox.Store, billingSvc *billing.Service) func(co
 		if ev.Status != "failed" && ev.Status != "expired_sla_missed" {
 			return platkafka.OutcomeOK, nil
 		}
-		if err := recordRefund(ctx, inboxStore, billingSvc, ev); err != nil {
+		if err := applyRefund(ctx, billingSvc, ev); err != nil {
 			metrics.ConsumerHandleErrors.WithLabelValues("billing-refund").Inc()
 			return platkafka.OutcomeRetry, err
 		}
@@ -100,17 +98,7 @@ func refundHandler(inboxStore *inbox.Store, billingSvc *billing.Service) func(co
 	}
 }
 
-func recordDebit(ctx context.Context, inboxStore *inbox.Store, billingSvc *billing.Service, consumerName string, ev messaging.AcceptedMessage) error {
-	tx, qtx, err := inboxStore.TryBegin(ctx, consumerName, ev.MessageID+":debit")
-	if inbox.IsAlreadyProcessed(err) {
-		metrics.InboxDuplicates.WithLabelValues(consumerName).Inc()
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
+func applyDebit(ctx context.Context, billingSvc *billing.Service, consumerName string, ev messaging.AcceptedMessage) error {
 	accountID, err := uuid.Parse(ev.AccountID)
 	if err != nil {
 		return fmt.Errorf("account id: %w", err)
@@ -119,10 +107,7 @@ func recordDebit(ctx context.Context, inboxStore *inbox.Store, billingSvc *billi
 	if err != nil {
 		return fmt.Errorf("message id: %w", err)
 	}
-	if err := billingSvc.RecordDebit(ctx, qtx, accountID, messageID, ev.Cost); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := billingSvc.ApplyDebit(ctx, accountID, messageID, ev.Cost); err != nil {
 		return err
 	}
 	priority := ev.Priority
@@ -134,8 +119,7 @@ func recordDebit(ctx context.Context, inboxStore *inbox.Store, billingSvc *billi
 	return nil
 }
 
-func recordRefund(ctx context.Context, inboxStore *inbox.Store, billingSvc *billing.Service, ev messaging.DispatchResult) error {
-	const consumer = "billing-refund"
+func applyRefund(ctx context.Context, billingSvc *billing.Service, ev messaging.DispatchResult) error {
 	accountID, err := uuid.Parse(ev.AccountID)
 	if err != nil {
 		return err
@@ -144,30 +128,10 @@ func recordRefund(ctx context.Context, inboxStore *inbox.Store, billingSvc *bill
 	if err != nil {
 		return err
 	}
-
-	tx, qtx, err := inboxStore.TryBegin(ctx, consumer, ev.MessageID+":refund")
-	if inbox.IsAlreadyProcessed(err) {
-		metrics.InboxDuplicates.WithLabelValues(consumer).Inc()
-		// Commit-then-Redis-crash recovery: align Redis to ledger (includes refund).
-		_, alignErr := billingSvc.AlignRedisToLedger(ctx, accountID)
-		return alignErr
-	}
-	if err != nil {
+	if err := billingSvc.ApplyRefund(ctx, accountID, messageID, ev.Cost); err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
-
-	if err := billingSvc.RecordRefundLedger(ctx, qtx, accountID, messageID, ev.Cost); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	// Redis credit only after Inbox+ledger commit (never before).
-	if err := billingSvc.CreditRedisAfterRefund(ctx, accountID, ev.Cost); err != nil {
-		return err
-	}
-	metrics.InboxProcessed.WithLabelValues(consumer).Inc()
+	metrics.InboxProcessed.WithLabelValues("billing-refund").Inc()
 	metrics.LedgerRefunds.WithLabelValues(ev.Status).Inc()
 	metrics.CreditsRefunded.WithLabelValues(ev.Status).Add(float64(ev.Cost))
 	return nil

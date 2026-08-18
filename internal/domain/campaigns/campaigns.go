@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/domain/messaging/phone"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
@@ -40,6 +39,7 @@ type AcceptRequest struct {
 	Text           string
 	Recipients     []string
 	IdempotencyKey string
+	Cost           int64
 }
 
 // AcceptResponse is returned after a successful campaign accept.
@@ -80,7 +80,7 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 	}
 
 	accountID := req.AccountID.String()
-	totalCost := billing.CostPerMessage * int64(len(normalized))
+	totalCost := req.Cost * int64(len(normalized))
 	campaignID := uuid.New()
 	acceptedAt := time.Now().UTC()
 	recipientsJSON, err := json.Marshal(normalized)
@@ -106,7 +106,7 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 		CampaignID:      campaignID.String(),
 		Text:            req.Text,
 		TotalCost:       totalCost,
-		CostPerMessage:  billing.CostPerMessage,
+		CostPerMessage:  req.Cost,
 		RecipientsJSON:  string(recipientsJSON),
 		AcceptedAt:      acceptedAt.Format(time.RFC3339Nano),
 		IdempotencyKey:  idemKey,

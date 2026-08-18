@@ -61,6 +61,7 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 		To:        "09121234567",
 		Text:      "hi",
 		Priority:  messaging.PriorityNormal,
+		Cost:      1,
 	})
 	if !errors.Is(err, messaging.ErrInsufficientFunds) {
 		t.Fatalf("expected insufficient funds, got %v", err)
@@ -75,6 +76,7 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 		Text:           "hi",
 		Priority:       messaging.PriorityNormal,
 		IdempotencyKey: "idem-1",
+		Cost:           1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +87,7 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 		Text:           "hi",
 		Priority:       messaging.PriorityNormal,
 		IdempotencyKey: "idem-1",
+		Cost:           1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +118,7 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 				Text:           "race",
 				Priority:       messaging.PriorityNormal,
 				IdempotencyKey: "idem-race",
+				Cost:           1,
 			})
 			if err != nil {
 				errs <- err
@@ -155,6 +159,7 @@ func TestAcceptInsufficientFundsAndIdempotency(t *testing.T) {
 		To:        "09121234567",
 		Text:      "otp",
 		Priority:  messaging.PriorityExpress,
+		Cost:      1,
 	})
 	if err != nil {
 		t.Fatal(err)

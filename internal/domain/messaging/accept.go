@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/domain/messaging/phone"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
@@ -42,6 +41,7 @@ type AcceptRequest struct {
 	To             string
 	Text           string
 	Priority       string
+	Cost           int64
 	IdempotencyKey string
 }
 
@@ -76,7 +76,7 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 	resp := AcceptResponse{
 		MessageID: msgID.String(),
 		Status:    "accepted",
-		Cost:      billing.CostPerMessage,
+		Cost:      req.Cost,
 	}
 	idemKey := ""
 	idemBody := ""
@@ -92,7 +92,7 @@ func (s *Service) Accept(ctx context.Context, req AcceptRequest) (AcceptResponse
 		To:              to,
 		Text:            req.Text,
 		Priority:        req.Priority,
-		Cost:            billing.CostPerMessage,
+		Cost:            req.Cost,
 		Deadline:        deadline,
 		CampaignID:      "",
 		AcceptedAt:      acceptedAt.Format(time.RFC3339Nano),

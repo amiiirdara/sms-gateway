@@ -107,6 +107,8 @@ func main() {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balance": bal})
 	}))))
 
+	costPerMsg := billing.CostPerMessage
+
 	mux.Handle("POST /v1/messages", metrics.InstrumentHTTP("/v1/messages", authMw(ingestLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, _ := auth.FromContext(r.Context())
 		var body struct {
@@ -128,6 +130,7 @@ func main() {
 			To:             body.To,
 			Text:           body.Text,
 			Priority:       body.Priority,
+			Cost:           costPerMsg,
 			IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		})
 		if errors.Is(err, messaging.ErrInsufficientFunds) {
@@ -162,6 +165,7 @@ func main() {
 			AccountID:      acc.ID,
 			Text:           body.Text,
 			Recipients:     body.Recipients,
+			Cost:           costPerMsg,
 			IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		})
 		var insuf *campaigns.InsufficientFundsError

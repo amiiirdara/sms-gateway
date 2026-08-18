@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/amiri/sms-gateway/internal/config"
 	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
+	platch "github.com/amiri/sms-gateway/internal/platform/clickhouse"
 	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platkafka "github.com/amiri/sms-gateway/internal/platform/kafka"
 	"github.com/amiri/sms-gateway/internal/platform/lifecycle"
@@ -39,6 +41,22 @@ func main() {
 
 	billingSvc := billing.New(pool, rdb)
 	inboxStore := inbox.New(pool)
+
+	// Credit-log ClickHouse adapter is constructed here so the type is wired;
+	// billing.New still uses NopCreditLog until the adapter is placed on the money path.
+	if cfg.ClickHouseAddr != "" {
+		chCtx, chCancel := context.WithTimeout(ctx, 2*time.Second)
+		chClient, chErr := platch.NewWithPassword(chCtx, cfg.ClickHouseAddr, cfg.ClickHousePassword)
+		chCancel()
+		if chErr != nil {
+			log.Printf("billing-consumer: clickhouse credit log not constructed: %v", chErr)
+		} else {
+			defer chClient.Close()
+			logAdapter := billing.NewClickHouseCreditLog(chClient)
+			_ = logAdapter
+			log.Println("billing-consumer: clickhouse credit-log adapter constructed (not on money path)")
+		}
+	}
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 

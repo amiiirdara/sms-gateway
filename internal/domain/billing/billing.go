@@ -12,7 +12,6 @@ import (
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -94,25 +93,12 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64, 
 	defer tx.Rollback(ctx)
 
 	qtx := s.q.WithTx(tx)
-	_, err = qtx.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
-		AccountID: accountID,
-		Type:      "topup",
-		Amount:    amount,
-		MessageID: nil,
+	acc, err := qtx.AddAccountBalance(ctx, sqlc.AddAccountBalanceParams{
+		ID:      accountID,
+		Balance: amount,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("ledger topup: %w", err)
-	}
-
-	sum, err := qtx.SumLedgerEntriesByAccount(ctx, accountID)
-	if err != nil {
-		return 0, fmt.Errorf("sum ledger: %w", err)
-	}
-	if _, err := qtx.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{
-		ID:      accountID,
-		Balance: sum,
-	}); err != nil {
-		return 0, fmt.Errorf("update account balance: %w", err)
+		return 0, fmt.Errorf("durable topup: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
@@ -129,8 +115,8 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64, 
 
 	newBal, err := s.rdb.IncrBalance(ctx, accountID.String(), amount)
 	if err != nil {
-		_ = s.rdb.SetBalance(ctx, accountID.String(), sum)
-		return sum, nil
+		_ = s.rdb.SetBalance(ctx, accountID.String(), acc.Balance)
+		return acc.Balance, nil
 	}
 	return newBal, nil
 }
@@ -140,9 +126,9 @@ func (s *Service) Balance(ctx context.Context, accountID uuid.UUID) (int64, erro
 	return s.rdb.GetBalance(ctx, accountID.String())
 }
 
-// DurableBalance returns the durable prepaid amount (ledger sum until the store cut).
+// DurableBalance returns the durable prepaid amount stored on the account.
 func (s *Service) DurableBalance(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	return s.q.SumLedgerEntriesByAccount(ctx, accountID)
+	return s.q.GetAccountBalance(ctx, accountID)
 }
 
 // ApplyDebit records a durable debit inside an Inbox transaction, then appends the credit log.
@@ -227,46 +213,18 @@ func (s *Service) Seed(ctx context.Context, accountID uuid.UUID) error {
 }
 
 func (s *Service) recordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
-	mid := messageID
-	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
-		AccountID: accountID,
-		Type:      "debit",
-		Amount:    -amount,
-		MessageID: &mid,
+	_, err := q.AddAccountBalance(ctx, sqlc.AddAccountBalanceParams{
+		ID:      accountID,
+		Balance: -amount,
 	})
-	if isUniqueViolation(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	sum, err := q.SumLedgerEntriesByAccount(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	_, err = q.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{ID: accountID, Balance: sum})
 	return err
 }
 
 func (s *Service) recordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
-	mid := messageID
-	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
-		AccountID: accountID,
-		Type:      "refund",
-		Amount:    amount,
-		MessageID: &mid,
+	_, err := q.AddAccountBalance(ctx, sqlc.AddAccountBalanceParams{
+		ID:      accountID,
+		Balance: amount,
 	})
-	if isUniqueViolation(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	sum, err := q.SumLedgerEntriesByAccount(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	_, err = q.UpdateAccountBalance(ctx, sqlc.UpdateAccountBalanceParams{ID: accountID, Balance: sum})
 	return err
 }
 
@@ -294,14 +252,6 @@ func (s *Service) alignLiveToDurable(ctx context.Context, accountID uuid.UUID) (
 		return 0, err
 	}
 	return sum, nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }
 
 // ErrNoRows re-export for callers that still check pgx.ErrNoRows via billing.

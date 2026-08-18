@@ -14,12 +14,21 @@ FROM accounts
 WHERE id = $1;
 
 -- name: UpdateAccountBalance :one
--- Aligns Postgres-cached balance with SUM(ledger_entries). Hot-path debit/credit
--- is Redis (ARCHITECTURE.md section 5); ledger_entries is durable ground truth.
 UPDATE accounts
 SET balance = $2, updated_at = now()
 WHERE id = $1
 RETURNING id, api_key_hash, name, balance, created_at, updated_at;
+
+-- name: AddAccountBalance :one
+UPDATE accounts
+SET balance = balance + $2, updated_at = now()
+WHERE id = $1
+RETURNING id, api_key_hash, name, balance, created_at, updated_at;
+
+-- name: GetAccountBalance :one
+SELECT balance
+FROM accounts
+WHERE id = $1;
 
 -- name: ListAccountIDs :many
 -- Keyset pagination for reconciler sweeps (pass uuid.Nil for the first page).

@@ -38,22 +38,19 @@ func main() {
 	}
 	defer rdb.Close()
 
-	billingSvc := billing.New(pool, rdb)
-
-	// Credit-log ClickHouse adapter is constructed here so the type is wired;
-	// billing.New still uses NopCreditLog until ticket 05 puts it on the money path.
+	var creditLog billing.CreditLog = billing.NopCreditLog{}
 	if cfg.ClickHouseAddr != "" {
 		chCtx, chCancel := context.WithTimeout(ctx, 2*time.Second)
 		chClient, chErr := platch.NewWithPassword(chCtx, cfg.ClickHouseAddr, cfg.ClickHousePassword)
 		chCancel()
 		if chErr != nil {
-			log.Printf("billing-consumer: clickhouse credit log not constructed: %v", chErr)
+			log.Printf("billing-consumer: clickhouse credit log unavailable: %v", chErr)
 		} else {
 			defer chClient.Close()
-			_ = billing.NewClickHouseCreditLog(chClient)
-			log.Println("billing-consumer: clickhouse credit-log adapter constructed (not on money path)")
+			creditLog = billing.NewClickHouseCreditLog(chClient)
 		}
 	}
+	billingSvc := billing.NewWithCreditLog(pool, rdb, creditLog)
 
 	metrics.Serve(env("METRICS_ADDR", ":9090"))
 

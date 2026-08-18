@@ -40,6 +40,10 @@ func startBillingStack(t *testing.T) (*billingStack, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	up3, err := os.ReadFile(filepath.Join(root, "db", "migrations", "000003_durable_balance_drop_ledger.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pgC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -67,6 +71,9 @@ func startBillingStack(t *testing.T) (*billingStack, context.Context) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, string(up2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(up3)); err != nil {
 		t.Fatal(err)
 	}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/amiri/sms-gateway/internal/domain/billing"
 	"github.com/amiri/sms-gateway/internal/domain/campaigns"
 	"github.com/amiri/sms-gateway/internal/domain/messaging"
+	platch "github.com/amiri/sms-gateway/internal/platform/clickhouse"
 	"github.com/amiri/sms-gateway/internal/platform/httpx"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/ratelimit"
@@ -38,7 +39,14 @@ func main() {
 	}
 	defer rdb.Close()
 
-	billingSvc := billing.New(pool, rdb)
+	var creditLog billing.CreditLog = billing.NopCreditLog{}
+	if ch, chErr := platch.NewWithPassword(ctx, cfg.ClickHouseAddr, cfg.ClickHousePassword); chErr != nil {
+		log.Printf("api-gateway: clickhouse credit log unavailable: %v", chErr)
+	} else {
+		defer ch.Close()
+		creditLog = billing.NewClickHouseCreditLog(ch)
+	}
+	billingSvc := billing.NewWithCreditLog(pool, rdb, creditLog)
 	msgSvc := messaging.New(rdb)
 	campSvc := campaigns.New(rdb)
 	authMw := auth.Middleware(billingSvc.Queries())

@@ -1,4 +1,4 @@
-// Package billing implements account creation, topups, and ledger writes.
+// Package billing implements account creation, topups, and durable money apply.
 package billing
 
 import (
@@ -8,6 +8,7 @@ import (
 
 	"github.com/amiri/sms-gateway/internal/db/sqlc"
 	"github.com/amiri/sms-gateway/internal/platform/httpx/auth"
+	"github.com/amiri/sms-gateway/internal/platform/inbox"
 	platredis "github.com/amiri/sms-gateway/internal/platform/redis"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,23 +16,41 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// CostPerMessage is the flat per-message credit cost.
-const CostPerMessage int64 = 1
+const (
+	// CostPerMessage is the flat per-message credit cost.
+	CostPerMessage int64 = 1
+
+	inboxDebitConsumer  = "billing-debit"
+	inboxRefundConsumer = "billing-refund"
+)
 
 // Service handles billing operations.
 type Service struct {
-	pool *pgxpool.Pool
-	q    *sqlc.Queries
-	rdb  *platredis.Client
+	pool      *pgxpool.Pool
+	q         *sqlc.Queries
+	rdb       *platredis.Client
+	inbox     *inbox.Store
+	creditLog CreditLog
 }
 
-// New creates a billing Service.
+// New creates a billing Service with a no-op credit log.
 func New(pool *pgxpool.Pool, rdb *platredis.Client) *Service {
-	return &Service{pool: pool, q: sqlc.New(pool), rdb: rdb}
+	return NewWithCreditLog(pool, rdb, NopCreditLog{})
+}
+
+// NewWithCreditLog creates a billing Service with an injected credit log.
+func NewWithCreditLog(pool *pgxpool.Pool, rdb *platredis.Client, log CreditLog) *Service {
+	if log == nil {
+		log = NopCreditLog{}
+	}
+	return &Service{pool: pool, q: sqlc.New(pool), rdb: rdb, inbox: inbox.New(pool), creditLog: log}
 }
 
 // Queries exposes sqlc queries (used by auth middleware).
 func (s *Service) Queries() *sqlc.Queries { return s.q }
+
+// Cost returns the per-message prepaid amount.
+func (s *Service) Cost() int64 { return CostPerMessage }
 
 // CreateAccountResult is returned by CreateAccount.
 type CreateAccountResult struct {
@@ -61,8 +80,9 @@ func (s *Service) CreateAccount(ctx context.Context, name string) (CreateAccount
 	return CreateAccountResult{AccountID: acc.ID, APIKey: apiKey}, nil
 }
 
-// TopUp adds credit to an account (ledger + Redis + cached Postgres balance).
-func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64) (int64, error) {
+// TopUp adds credit to an account (durable balance + live balance + credit log).
+// idempotencyKey is accepted now; uniqueness is enforced in a later ticket.
+func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64, idempotencyKey string) (int64, error) {
 	if amount <= 0 {
 		return 0, errors.New("amount must be positive")
 	}
@@ -98,6 +118,15 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64) 
 		return 0, err
 	}
 
+	if err := s.creditLog.Append(ctx, CreditLogEntry{
+		AccountID:      accountID,
+		Type:           "topup",
+		Amount:         amount,
+		IdempotencyKey: idempotencyKey,
+	}); err != nil {
+		return 0, fmt.Errorf("credit log topup: %w", err)
+	}
+
 	newBal, err := s.rdb.IncrBalance(ctx, accountID.String(), amount)
 	if err != nil {
 		_ = s.rdb.SetBalance(ctx, accountID.String(), sum)
@@ -106,14 +135,107 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64) 
 	return newBal, nil
 }
 
-// Balance returns the hot-path Redis balance.
+// Balance returns the live (Redis) balance.
 func (s *Service) Balance(ctx context.Context, accountID uuid.UUID) (int64, error) {
 	return s.rdb.GetBalance(ctx, accountID.String())
 }
 
-// RecordDebit writes a durable ledger debit and updates the cached Postgres balance.
-// Unique (message_id) WHERE type=debit makes this safe under retries.
+// DurableBalance returns the durable prepaid amount (ledger sum until the store cut).
+func (s *Service) DurableBalance(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	return s.q.SumLedgerEntriesByAccount(ctx, accountID)
+}
+
+// ApplyDebit records a durable debit inside an Inbox transaction, then appends the credit log.
+func (s *Service) ApplyDebit(ctx context.Context, accountID, messageID uuid.UUID, cost int64) error {
+	entry := CreditLogEntry{AccountID: accountID, Type: "debit", Amount: -cost, MessageID: &messageID}
+	tx, qtx, err := s.inbox.TryBegin(ctx, inboxDebitConsumer, messageID.String()+":debit")
+	if inbox.IsAlreadyProcessed(err) {
+		return s.creditLog.Append(ctx, entry)
+	}
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := s.recordDebit(ctx, qtx, accountID, messageID, cost); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return s.creditLog.Append(ctx, entry)
+}
+
+// ApplyRefund records a durable refund inside Inbox, credits live balance after commit, then appends the credit log.
+func (s *Service) ApplyRefund(ctx context.Context, accountID, messageID uuid.UUID, cost int64) error {
+	entry := CreditLogEntry{AccountID: accountID, Type: "refund", Amount: cost, MessageID: &messageID}
+	tx, qtx, err := s.inbox.TryBegin(ctx, inboxRefundConsumer, messageID.String()+":refund")
+	if inbox.IsAlreadyProcessed(err) {
+		if _, alignErr := s.alignLiveToDurable(ctx, accountID); alignErr != nil {
+			return alignErr
+		}
+		return s.creditLog.Append(ctx, entry)
+	}
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := s.recordRefundLedger(ctx, qtx, accountID, messageID, cost); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if err := s.creditRedisAfterRefund(ctx, accountID, cost); err != nil {
+		return err
+	}
+	return s.creditLog.Append(ctx, entry)
+}
+
+// Heal sets live balance down to durable balance when live is higher. It never grants credit.
+func (s *Service) Heal(ctx context.Context, accountID uuid.UUID) error {
+	exists, err := s.rdb.HasBalance(ctx, accountID.String())
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	durable, err := s.DurableBalance(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	live, err := s.rdb.GetBalance(ctx, accountID.String())
+	if err != nil {
+		return err
+	}
+	if live > durable {
+		return s.rdb.SetBalance(ctx, accountID.String(), durable)
+	}
+	return nil
+}
+
+// Seed copies durable balance into live balance only when the live key is absent.
+func (s *Service) Seed(ctx context.Context, accountID uuid.UUID) error {
+	exists, err := s.rdb.HasBalance(ctx, accountID.String())
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	durable, err := s.DurableBalance(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	return s.rdb.SetBalance(ctx, accountID.String(), durable)
+}
+
+// RecordDebit writes a durable ledger debit. Kept for cmd until the consumer migration.
 func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
+	return s.recordDebit(ctx, q, accountID, messageID, amount)
+}
+
+func (s *Service) recordDebit(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	mid := messageID
 	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
 		AccountID: accountID,
@@ -135,9 +257,12 @@ func (s *Service) RecordDebit(ctx context.Context, q *sqlc.Queries, accountID, m
 	return err
 }
 
-// RecordRefundLedger writes a refund ledger entry and updates the Postgres cache.
-// Redis must be credited AFTER the surrounding Inbox transaction commits.
+// RecordRefundLedger writes a refund ledger entry. Kept for cmd until the consumer migration.
 func (s *Service) RecordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
+	return s.recordRefundLedger(ctx, q, accountID, messageID, amount)
+}
+
+func (s *Service) recordRefundLedger(ctx context.Context, q *sqlc.Queries, accountID, messageID uuid.UUID, amount int64) error {
 	mid := messageID
 	_, err := q.InsertLedgerEntry(ctx, sqlc.InsertLedgerEntryParams{
 		AccountID: accountID,
@@ -160,10 +285,13 @@ func (s *Service) RecordRefundLedger(ctx context.Context, q *sqlc.Queries, accou
 }
 
 // CreditRedisAfterRefund increments Redis after a committed ledger refund.
-// On failure, aligns Redis to the ledger sum (safe repair).
 func (s *Service) CreditRedisAfterRefund(ctx context.Context, accountID uuid.UUID, amount int64) error {
+	return s.creditRedisAfterRefund(ctx, accountID, amount)
+}
+
+func (s *Service) creditRedisAfterRefund(ctx context.Context, accountID uuid.UUID, amount int64) error {
 	if _, err := s.rdb.IncrBalance(ctx, accountID.String(), amount); err != nil {
-		_, alignErr := s.AlignRedisToLedger(ctx, accountID)
+		_, alignErr := s.alignLiveToDurable(ctx, accountID)
 		if alignErr != nil {
 			return fmt.Errorf("redis credit: %w (align: %v)", err, alignErr)
 		}
@@ -171,9 +299,9 @@ func (s *Service) CreditRedisAfterRefund(ctx context.Context, accountID uuid.UUI
 	return nil
 }
 
-// LedgerSum returns SUM(ledger_entries) for reconciler.
+// LedgerSum is DurableBalance. Kept for cmd until the consumer migration.
 func (s *Service) LedgerSum(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	return s.q.SumLedgerEntriesByAccount(ctx, accountID)
+	return s.DurableBalance(ctx, accountID)
 }
 
 // ListAccountIDsPage returns account IDs after afterID (keyset), up to limit.
@@ -181,9 +309,13 @@ func (s *Service) ListAccountIDsPage(ctx context.Context, afterID uuid.UUID, lim
 	return s.q.ListAccountIDs(ctx, sqlc.ListAccountIDsParams{ID: afterID, Limit: limit})
 }
 
-// AlignRedisToLedger sets Redis balance from the ledger sum (cold start / safe heal).
+// AlignRedisToLedger sets live balance from durable balance. Kept for cmd until the consumer migration.
 func (s *Service) AlignRedisToLedger(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	sum, err := s.LedgerSum(ctx, accountID)
+	return s.alignLiveToDurable(ctx, accountID)
+}
+
+func (s *Service) alignLiveToDurable(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	sum, err := s.DurableBalance(ctx, accountID)
 	if err != nil {
 		return 0, err
 	}

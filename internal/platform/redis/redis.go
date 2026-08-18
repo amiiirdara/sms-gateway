@@ -67,6 +67,15 @@ func (c *Client) GetBalance(ctx context.Context, accountID string) (int64, error
 	return strconv.ParseInt(val, 10, 64)
 }
 
+// HasBalance reports whether the live-balance key exists (distinct from value 0).
+func (c *Client) HasBalance(ctx context.Context, accountID string) (bool, error) {
+	n, err := c.rdb.Exists(ctx, BalanceKey(accountID)).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // SetBalance overwrites the Redis balance (used by topup, refund, reconciler).
 func (c *Client) SetBalance(ctx context.Context, accountID string, balance int64) error {
 	return c.rdb.Set(ctx, BalanceKey(accountID), balance, 0).Err()

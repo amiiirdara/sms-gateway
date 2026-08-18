@@ -88,7 +88,7 @@ func TestRefundLedgerThenRedisOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.TopUp(ctx, acc.AccountID, 5); err != nil {
+	if _, err := svc.TopUp(ctx, acc.AccountID, 5, ""); err != nil {
 		t.Fatal(err)
 	}
 	msgID := uuid.New()

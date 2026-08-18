@@ -87,7 +87,7 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		bal, err := billingSvc.TopUp(r.Context(), acc.ID, body.Amount)
+		bal, err := billingSvc.TopUp(r.Context(), acc.ID, body.Amount, "")
 		if err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return

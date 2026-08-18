@@ -95,7 +95,12 @@ func main() {
 			httpx.Error(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		bal, err := billingSvc.TopUp(r.Context(), acc.ID, body.Amount, "")
+		idem := r.Header.Get("Idempotency-Key")
+		bal, err := billingSvc.TopUp(r.Context(), acc.ID, body.Amount, idem)
+		if errors.Is(err, billing.ErrMissingIdempotencyKey) {
+			httpx.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return

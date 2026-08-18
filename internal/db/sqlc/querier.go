@@ -27,6 +27,7 @@ type Querier interface {
 	GetCampaignByIDOnly(ctx context.Context, id uuid.UUID) (GetCampaignByIDOnlyRow, error)
 	GetMessageByID(ctx context.Context, id uuid.UUID) (Message, error)
 	GetMessageByIDForAccount(ctx context.Context, arg GetMessageByIDForAccountParams) (Message, error)
+	GetTopupIdempotency(ctx context.Context, arg GetTopupIdempotencyParams) (TopupIdempotency, error)
 	InsertMessageStatusEvent(ctx context.Context, arg InsertMessageStatusEventParams) error
 	IsEventProcessed(ctx context.Context, arg IsEventProcessedParams) (bool, error)
 	// Keyset pagination for reconciler sweeps (pass uuid.Nil for the first page).
@@ -37,6 +38,8 @@ type Querier interface {
 	// skip the side effect but still commit the Kafka offset. Must run in the same
 	// transaction as the business write it guards. See ARCHITECTURE.md section 5.2.
 	MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) (MarkEventProcessedRow, error)
+	SetTopupIdempotencyBalance(ctx context.Context, arg SetTopupIdempotencyBalanceParams) error
+	TryInsertTopupIdempotency(ctx context.Context, arg TryInsertTopupIdempotencyParams) (TopupIdempotency, error)
 	UpdateAccountBalance(ctx context.Context, arg UpdateAccountBalanceParams) (Account, error)
 	UpdateCampaignExpandedThrough(ctx context.Context, arg UpdateCampaignExpandedThroughParams) error
 	UpdateCampaignStatus(ctx context.Context, arg UpdateCampaignStatusParams) error

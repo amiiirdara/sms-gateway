@@ -79,11 +79,16 @@ func (s *Service) CreateAccount(ctx context.Context, name string) (CreateAccount
 	return CreateAccountResult{AccountID: acc.ID, APIKey: apiKey}, nil
 }
 
+// ErrMissingIdempotencyKey is returned when a topup has no Idempotency-Key.
+var ErrMissingIdempotencyKey = errors.New("Idempotency-Key is required")
+
 // TopUp adds credit to an account (durable balance + live balance + credit log).
-// idempotencyKey is accepted now; uniqueness is enforced in a later ticket.
 func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64, idempotencyKey string) (int64, error) {
 	if amount <= 0 {
 		return 0, errors.New("amount must be positive")
+	}
+	if idempotencyKey == "" {
+		return 0, ErrMissingIdempotencyKey
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -93,12 +98,41 @@ func (s *Service) TopUp(ctx context.Context, accountID uuid.UUID, amount int64, 
 	defer tx.Rollback(ctx)
 
 	qtx := s.q.WithTx(tx)
+	_, err = qtx.TryInsertTopupIdempotency(ctx, sqlc.TryInsertTopupIdempotencyParams{
+		AccountID:      accountID,
+		IdempotencyKey: idempotencyKey,
+		Amount:         amount,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, getErr := qtx.GetTopupIdempotency(ctx, sqlc.GetTopupIdempotencyParams{
+			AccountID:      accountID,
+			IdempotencyKey: idempotencyKey,
+		})
+		if getErr != nil {
+			return 0, fmt.Errorf("topup idempotency lookup: %w", getErr)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return existing.DurableBalance, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("topup idempotency: %w", err)
+	}
+
 	acc, err := qtx.AddAccountBalance(ctx, sqlc.AddAccountBalanceParams{
 		ID:      accountID,
 		Balance: amount,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("durable topup: %w", err)
+	}
+	if err := qtx.SetTopupIdempotencyBalance(ctx, sqlc.SetTopupIdempotencyBalanceParams{
+		AccountID:      accountID,
+		IdempotencyKey: idempotencyKey,
+		DurableBalance: acc.Balance,
+	}); err != nil {
+		return 0, fmt.Errorf("topup idempotency store: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err

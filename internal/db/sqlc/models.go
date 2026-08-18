@@ -77,3 +77,12 @@ type ProcessedEvent struct {
 	ProcessedAt  pgtype.Timestamptz `json:"processed_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
+
+type TopupIdempotency struct {
+	AccountID      uuid.UUID          `json:"account_id"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	Amount         int64              `json:"amount"`
+	DurableBalance int64              `json:"durable_balance"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}

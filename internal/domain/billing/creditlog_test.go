@@ -2,6 +2,7 @@ package billing_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/amiri/sms-gateway/internal/domain/billing"
@@ -28,5 +29,13 @@ func TestCostMatchesCostPerMessage(t *testing.T) {
 	svc := billing.New(nil, nil)
 	if svc.Cost() != billing.CostPerMessage {
 		t.Fatalf("Cost()=%d want %d", svc.Cost(), billing.CostPerMessage)
+	}
+}
+
+func TestTopUpRequiresIdempotencyKey(t *testing.T) {
+	svc := billing.New(nil, nil)
+	_, err := svc.TopUp(context.Background(), uuid.New(), 1, "")
+	if !errors.Is(err, billing.ErrMissingIdempotencyKey) {
+		t.Fatalf("got %v", err)
 	}
 }

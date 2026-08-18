@@ -44,6 +44,10 @@ func startBillingStack(t *testing.T) (*billingStack, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	up4, err := os.ReadFile(filepath.Join(root, "db", "migrations", "000004_topup_idempotency.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pgC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -74,6 +78,9 @@ func startBillingStack(t *testing.T) (*billingStack, context.Context) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, string(up3)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(up4)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +139,7 @@ func TestApplyRefundInboxReplayAlignsLiveToDurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, ""); err != nil {
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, "t5"); err != nil {
 		t.Fatal(err)
 	}
 	msgID := uuid.New()
@@ -170,7 +177,7 @@ func TestApplyRefundCreditsLiveAfterDurableCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, ""); err != nil {
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, "t5"); err != nil {
 		t.Fatal(err)
 	}
 	msgID := uuid.New()
@@ -202,7 +209,7 @@ func TestHealSetsLiveDownOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, ""); err != nil {
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 5, "t5"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,7 +242,7 @@ func TestSeedFillsAbsentKeyOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.svc.TopUp(ctx, acc.AccountID, 7, ""); err != nil {
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 7, "t7"); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.rdb.Raw().Del(ctx, platredis.BalanceKey(acc.AccountID.String())).Err(); err != nil {
@@ -283,13 +290,49 @@ func TestTopUpCreditsDurableAndLive(t *testing.T) {
 	}
 }
 
+func TestTopUpIdempotentReplayAndDistinctKeys(t *testing.T) {
+	st, ctx := startBillingStack(t)
+	acc, err := st.svc.CreateAccount(ctx, "topup-idem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.svc.TopUp(ctx, acc.AccountID, 4, "same")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := st.svc.TopUp(ctx, acc.AccountID, 4, "same")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != replay {
+		t.Fatalf("replay live=%d first=%d", replay, first)
+	}
+	durable, err := st.svc.DurableBalance(ctx, acc.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durable != 4 {
+		t.Fatalf("durable after replay=%d want 4", durable)
+	}
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 4, "other"); err != nil {
+		t.Fatal(err)
+	}
+	durable, err = st.svc.DurableBalance(ctx, acc.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durable != 8 {
+		t.Fatalf("durable after second key=%d want 8", durable)
+	}
+}
+
 func TestHealSeedsAbsentLiveKey(t *testing.T) {
 	st, ctx := startBillingStack(t)
 	acc, err := st.svc.CreateAccount(ctx, "heal-seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.svc.TopUp(ctx, acc.AccountID, 6, ""); err != nil {
+	if _, err := st.svc.TopUp(ctx, acc.AccountID, 6, "t6"); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.rdb.Raw().Del(ctx, platredis.BalanceKey(acc.AccountID.String())).Err(); err != nil {

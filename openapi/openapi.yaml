@@ -40,6 +40,8 @@ paths:
   /topups:
     post:
       summary: Add credit to the authenticated account's balance
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
